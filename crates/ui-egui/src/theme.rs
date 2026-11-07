@@ -101,9 +101,11 @@ pub fn tool_button_icon(ui: &mut Ui, icon: ToolIcon<'_>, caption: Option<&str>, 
         ToolIcon::Glyph(glyph) => {
             painter.text(center, Align2::CENTER_CENTER, glyph, FontId::proportional(size), color);
         }
-        // Sized to the box of the outline glyph it sits next to, so the two read as a pair.
+        // Sized to the box of the outline glyph it sits next to, so the two read as a pair; one
+        // pixel lower than the geometric centre, where that glyph's ink sits.
         ToolIcon::FilledSquare => {
-            painter.rect_filled(egui::Rect::from_center_size(center, Vec2::splat(size * 0.75)), CornerRadius::same(2), color);
+            let centre = center + Vec2::new(0.0, 1.0);
+            painter.rect_filled(egui::Rect::from_center_size(centre, Vec2::splat(size * 0.75)), CornerRadius::same(2), color);
         }
     };
     match caption {

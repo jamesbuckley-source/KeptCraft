@@ -16,7 +16,7 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::{ExportFormat, Preset, Settings};
+use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
     ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, Orient, PROJECT_EXT, RedactMode, Shape, TextStyle, constrain_aspect,
@@ -132,6 +132,8 @@ struct Editor {
     project_path: Option<PathBuf>,
     /// Where Save writes when the caller chose a destination (`open-annotate --save-to`).
     save_target: Option<PathBuf>,
+    /// Files the File menu offers under Recent Files, most recent last.
+    recent: Vec<PathBuf>,
     settings: Settings,
     tool: Tool,
     color: Color32,
@@ -184,11 +186,16 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
     let settings = Settings::load();
     let color = settings.palette.first().map_or(Color32::from_rgb(255, 59, 48), |c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
     let show_background = doc.background.is_some();
+    let mut recent = State::load().recent_files;
+    if let Some(path) = path.as_ref() {
+        remember_recent(&mut recent, path);
+    }
     theme::run("shotcraft-editor", builder, move |_| Editor {
         doc,
         history_id,
         project_path,
         save_target,
+        recent,
         settings,
         tool: Tool::Arrow,
         color,
@@ -226,6 +233,16 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
 
 fn swatch_color(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+}
+
+/// Keep `path` at the end of the recent list, the newest last, and on disk for the next window.
+fn remember_recent(recent: &mut Vec<PathBuf>, path: &Path) {
+    recent.retain(|p| p != path);
+    recent.push(path.to_path_buf());
+    let excess = recent.len().saturating_sub(10);
+    recent.drain(..excess);
+    let saved = recent.clone();
+    State::update(|s| s.recent_files = saved);
 }
 
 /// Tell the caller that chose the destination which file it got. The editor has no console of its
@@ -347,8 +364,95 @@ impl Editor {
         if let Some(Some(path)) = self.report(r) {
             self.saved_revision = self.revision;
             self.sync_history();
+            remember_recent(&mut self.recent, &path);
             self.flash(format!("Saved {}", path.display()));
         }
+    }
+
+    /// The File menu: the editor's own document actions, separate from the tools and the ⋯ menu.
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let has_recent = !self.recent.is_empty();
+        ui.menu_button(format!("{}  File", icon::FOLDER_SIMPLE), |ui| {
+            ui.set_min_width(240.0);
+            if ui.button(format!("{}  Open…", icon::FOLDER_OPEN)).on_hover_text("Open an image or a project (Ctrl/Cmd+O)").clicked() {
+                ui.close();
+                if let Some(path) = dialogs::pick_image() {
+                    self.open_path(&ctx, path);
+                }
+            }
+            ui.add_enabled_ui(has_recent, |ui| {
+                ui.menu_button(format!("{}  Recent Files", icon::CLOCK_COUNTER_CLOCKWISE), |ui| {
+                    ui.set_min_width(280.0);
+                    for path in self.recent.clone().into_iter().rev() {
+                        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
+                        if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
+                            ui.close();
+                            self.open_path(&ctx, path);
+                        }
+                    }
+                });
+            });
+            if ui.button(format!("{}  Import from Clipboard", icon::CLIPBOARD)).clicked() {
+                ui.close();
+                let image = self.report(share::clipboard_image());
+                if let Some(image) = image {
+                    self.load_document(Doc::new(image), None);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Title("ShotCraft4Kept — Annotate".to_owned()));
+                }
+            }
+            ui.separator();
+            if ui.button(format!("{}  Save", icon::FLOPPY_DISK)).on_hover_text("Save (Ctrl/Cmd+S)").clicked() {
+                ui.close();
+                self.save();
+            }
+            if ui.button(format!("{}  Save As…", icon::DOWNLOAD_SIMPLE)).on_hover_text("Save As (Shift+Ctrl/Cmd+S)").clicked() {
+                ui.close();
+                self.save_as();
+            }
+            ui.separator();
+            if ui.button(format!("{}  Close", icon::X)).on_hover_text("Close (Ctrl/Cmd+W)").clicked() {
+                ui.close();
+                // The viewport's close request, so unsaved project edits still ask first.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    }
+
+    fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+        match Doc::open(&path) {
+            Ok(doc) => {
+                let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_string());
+                self.load_document(doc, Some(path));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — ShotCraft4Kept")));
+            }
+            Err(err) => self.flash(format!("Could not open {}: {err}", path.display())),
+        }
+    }
+
+    /// Show a different document in this window; the old one's history id and save target go with it.
+    fn load_document(&mut self, doc: Doc, path: Option<PathBuf>) {
+        if let Some(path) = path.as_ref() {
+            remember_recent(&mut self.recent, path);
+        }
+        self.doc = doc;
+        self.show_background = self.doc.background.is_some();
+        self.project_path = path.filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)));
+        self.history_id = None;
+        self.save_target = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.selected = None;
+        self.editing = None;
+        self.crop = None;
+        self.base_cache = None;
+        self.tex = None;
+        self.render_key = None;
+        self.zoom = 1.0;
+        self.pan = Vec2::ZERO;
+        self.revision += 1;
+        self.saved_revision = self.revision;
+        self.status = None;
     }
 
     fn save_project_as(&mut self) {
@@ -586,6 +690,12 @@ impl Editor {
                 self.copy();
             } else if pressed(Key::S) {
                 if shift { self.save_as() } else { self.save() }
+            } else if pressed(Key::O) {
+                if let Some(path) = dialogs::pick_image() {
+                    self.open_path(ctx, path);
+                }
+            } else if pressed(Key::W) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else if pressed(Key::Num0) {
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
@@ -658,6 +768,8 @@ impl Editor {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.horizontal_centered(|ui| {
+            self.file_menu(ui);
+            ui.separator();
             if theme::tool_button(ui, icon::CROP, None, self.crop.is_some(), false).on_hover_text("Crop (C)").clicked() {
                 if self.crop.is_some() { self.apply_crop() } else { self.enter_crop() }
             }

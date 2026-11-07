@@ -35,7 +35,9 @@ struct Daemon {
     _lock: File,
 }
 
-pub(crate) const MENU: [Option<(&str, &str)>; 18] = [
+pub(crate) const MENU: [Option<(&str, &str)>; 19] = [
+    Some(("Open ShotCraft4Kept Editor", "open-annotate")),
+    None,
     Some(("All-In-One", "all-in-one")),
     Some(("Capture Area", "capture-area")),
     Some(("Capture Previous Area", "capture-previous-area")),
@@ -45,7 +47,6 @@ pub(crate) const MENU: [Option<(&str, &str)>; 18] = [
     Some(("Scrolling Capture", "scrolling-capture")),
     Some(("Capture Text (OCR)", "capture-text")),
     None,
-    Some(("Annotate Image…", "open-annotate")),
     Some(("Annotate from Clipboard", "open-from-clipboard")),
     Some(("Pin Image…", "pin")),
     None,

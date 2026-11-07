@@ -337,6 +337,8 @@ pub struct State {
     pub last_area: Option<LastArea>,
     /// History ids of Quick Access Overlays closed without an action, most recent last.
     pub recently_closed: Vec<String>,
+    /// Files opened in the editor, most recent last: the File menu's Recent Files.
+    pub recent_files: Vec<PathBuf>,
 }
 
 impl State {

@@ -66,6 +66,12 @@ The app id `io.github.mmartinez.shotcraft` (`theme::APP_ID`) names the window cl
 The editor preview and every export go through `doc::render`, so what the user sees is what gets saved.
 Add drawing behaviour there, not in egui painting code.
 
+### Files another app handed over
+
+`open-annotate --save-to` and `--overwrite` are a contract with a caller (Kept, a script): Save writes
+that exact path, prints it on stdout, and the write goes through a temporary file and a rename, so a
+watcher never reads a partial image. Keep all three when touching the editor's save path.
+
 ## Checks
 
 Run these before every commit; CI runs clippy and the tests on Linux, Windows and macOS, and the format check on Linux.

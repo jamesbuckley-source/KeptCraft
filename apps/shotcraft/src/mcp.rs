@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn show_args_round_trip() {
         let id = "20261017-101502117-04211";
-        assert!(matches!(parse(show_args(View::Editor, id)), Some(Cmd::OpenAnnotate { filepath: None, history: Some(h) }) if h == id));
+        assert!(matches!(parse(show_args(View::Editor, id)), Some(Cmd::OpenAnnotate { filepath: None, history: Some(h), .. }) if h == id));
         assert!(matches!(parse(show_args(View::Pin, id)), Some(Cmd::Pin { filepath: None, history: Some(h) }) if h == id));
         assert!(matches!(parse(show_args(View::QuickAccess, id)), Some(Cmd::AddQuickAccessOverlay { filepath: None, history: Some(h) }) if h == id));
     }

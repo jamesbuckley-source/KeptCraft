@@ -314,6 +314,42 @@ pub fn write_image(img: &RgbaImage, path: &Path, format: ExportFormat, settings:
     std::fs::write(path, bytes).map_err(|e| Error::Other(format!("cannot write {}: {e}", path.display())))
 }
 
+/// Save to the file the caller named instead of a new timestamped one in the save folder.
+///
+/// The destination is the same on every save, so the app that asked for the edit (a clip manager, a
+/// script) knows exactly where it landed without watching the save folder. A name without an
+/// extension gets the configured format's, and an existing file is replaced.
+pub fn save_to(img: &RgbaImage, target: &Path, settings: &Settings) -> Result<PathBuf> {
+    if target.is_dir() {
+        return Err(Error::Other(format!("{} is a folder; pass a file name", target.display())));
+    }
+    let (path, format) = match ExportFormat::from_path(target) {
+        Some(format) => (target.to_path_buf(), format),
+        // Append rather than replace: "Kept shot" must not become "Kept.png".
+        None => {
+            let mut name = target.as_os_str().to_owned();
+            name.push(".");
+            name.push(settings.export_format.ext());
+            (PathBuf::from(name), settings.export_format)
+        }
+    };
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Write beside the target and rename over it, so an app watching the path (a clip manager)
+    // never opens a half-written image.
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let write = write_image(img, &tmp, format, settings)
+        .and_then(|()| std::fs::rename(&tmp, &path).map_err(|e| Error::Other(format!("cannot write {}: {e}", path.display()))));
+    if write.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    write?;
+    Ok(path)
+}
+
 /// Save into the configured folder with the default name.
 pub fn save_default(img: &RgbaImage, settings: &Settings) -> Result<PathBuf> {
     std::fs::create_dir_all(&settings.save_dir)?;
@@ -418,6 +454,42 @@ mod tests {
         assert_eq!(extract_link(json, "data.files.0.url").unwrap(), "https://x.test/1");
         assert!(extract_link(json, "data.missing").is_err());
         assert!(extract_link("<html>error</html>", "").is_err());
+    }
+
+    #[test]
+    fn save_to_writes_exactly_where_it_was_told() {
+        let dir = std::env::temp_dir().join(format!("shotcraft-save-to-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings::default();
+        let img = RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]));
+        // The parent folder is made, and a name without an extension gets the configured one.
+        let target = dir.join("nested").join("result");
+        let path = save_to(&img, &target, &settings).unwrap();
+        assert_eq!(path, dir.join("nested").join("result.png"));
+        assert!(path.is_file());
+        // A second save replaces the same file instead of naming a new one.
+        let again = save_to(&RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255])), &target, &settings).unwrap();
+        assert_eq!(again, path);
+        assert_eq!(image::open(&path).unwrap().width(), 2);
+        // The write goes through a temporary file beside the target, which never outlives it.
+        let leftovers: Vec<_> =
+            std::fs::read_dir(dir.join("nested")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+        assert!(leftovers.is_empty(), "a temporary file was left behind");
+        // A folder is refused rather than guessed at: the caller wants a known path.
+        assert!(save_to(&img, &dir, &settings).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_to_takes_the_format_from_the_extension() {
+        let dir = std::env::temp_dir().join(format!("shotcraft-save-format-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings::default();
+        let path = save_to(&RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255])), &dir.join("kept.jpeg"), &settings).unwrap();
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("jpeg"));
+        // JPEG has no alpha, so the file decodes back as one.
+        assert!(image::open(&path).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

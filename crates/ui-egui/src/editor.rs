@@ -4,7 +4,7 @@
 //! preview is pixel-for-pixel what gets saved. Only handles and the live text editor are
 //! drawn by egui on top.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
@@ -130,6 +130,8 @@ struct Editor {
     doc: Doc,
     history_id: Option<String>,
     project_path: Option<PathBuf>,
+    /// Where Save writes when the caller chose a destination (`open-annotate --save-to`).
+    save_target: Option<PathBuf>,
     settings: Settings,
     tool: Tool,
     color: Color32,
@@ -164,16 +166,19 @@ struct Editor {
     preset_name: String,
 }
 
-pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>) -> anyhow::Result<()> {
+/// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
+/// manager, a script); without it Save exports a new timestamped file into the save folder.
+pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_target: Option<PathBuf>) -> anyhow::Result<()> {
     let screen = capture::primary_logical_rect();
     let scale = capture::primary_scale();
     let natural = vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0);
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
     let size = natural.max(vec2(980.0, 640.0)).min(screen.size() * 0.88);
-    let project_path = path.filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)));
-    let title = match (&project_path, &history_id) {
-        (Some(p), _) => format!("{} — Annotate", p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()),
-        _ => "Annotate".to_owned(),
+    let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
+    // Name the file in the title: several editors can be open, and one of them is a caller's clip.
+    let title = match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
+        Some(name) => format!("{} — Annotate", name.to_string_lossy()),
+        None => "Annotate".to_owned(),
     };
     let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(760.0, 480.0)).with_drag_and_drop(true);
     let settings = Settings::load();
@@ -183,6 +188,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>) -> anyho
         doc,
         history_id,
         project_path,
+        save_target,
         settings,
         tool: Tool::Arrow,
         color,
@@ -220,6 +226,15 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>) -> anyho
 
 fn swatch_color(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+}
+
+/// Tell the caller that chose the destination which file it got. The editor has no console of its
+/// own on Windows, so a failed write is not an error; the file itself is the contract.
+fn announce_save(path: &Path) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "{}", path.display());
+    let _ = out.flush();
 }
 
 impl Editor {
@@ -300,6 +315,17 @@ impl Editor {
     }
 
     fn save(&mut self) {
+        // A caller that named the output (`--save-to`) gets exactly that file, even for a project.
+        if let Some(target) = self.save_target.clone() {
+            let r = self.export_image().and_then(|img| share::save_to(&img, &target, &self.settings));
+            if let Some(path) = self.report(r) {
+                self.saved_revision = self.revision;
+                self.sync_history();
+                self.flash(format!("Saved {}", path.display()));
+                announce_save(&path);
+            }
+            return;
+        }
         if let Some(path) = self.project_path.clone() {
             let r = self.doc.save_project(&path).map_err(|e| format!("Could not save {}: {e}", path.display()));
             if self.report(r).is_some() {
@@ -682,7 +708,11 @@ impl Editor {
                     }
                 });
                 let save = egui::Button::new(RichText::new(format!("{}  Save", icon::FLOPPY_DISK)).color(Color32::WHITE)).fill(theme::ACCENT);
-                if ui.add(save).on_hover_text("Save (Ctrl/Cmd+S)").clicked() {
+                let save_hint = match &self.save_target {
+                    Some(target) => format!("Save to {}", target.display()),
+                    None => "Save (Ctrl/Cmd+S)".to_owned(),
+                };
+                if ui.add(save).on_hover_text(save_hint).clicked() {
                     self.save();
                 }
                 if ui.button(format!("{}  Copy", icon::COPY)).on_hover_text("Copy (Ctrl/Cmd+C)").clicked() {

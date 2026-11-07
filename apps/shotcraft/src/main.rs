@@ -124,6 +124,12 @@ enum Cmd {
         filepath: Option<PathBuf>,
         #[arg(long, hide = true)]
         history: Option<String>,
+        /// Write Save to this file instead of a new timestamped one, and print the path on save.
+        #[arg(long, value_name = "PATH", conflicts_with = "overwrite")]
+        save_to: Option<PathBuf>,
+        /// Save over the file being annotated, instead of into the save folder.
+        #[arg(long)]
+        overwrite: bool,
     },
     OpenFromClipboard,
     /// Show the Quick Access Overlay for an image.
@@ -248,14 +254,15 @@ fn dispatch(cmd: Cmd) -> anyhow::Result<()> {
                 None => overlay_flow(Mode::Text, None, None, &settings),
             }
         }
-        Cmd::OpenAnnotate { filepath, history } => {
+        Cmd::OpenAnnotate { filepath, history, save_to, overwrite } => {
             if let Some(id) = history {
-                return editor::run(history::load_doc(&id)?, Some(id), None);
+                return editor::run(history::load_doc(&id)?, Some(id), None, save_to);
             }
             let Some(path) = filepath.or_else(dialogs::pick_image) else { return Ok(()) };
-            editor::run(Doc::open(&path)?, None, Some(path))
+            let target = save_to.or_else(|| overwrite.then(|| path.clone()));
+            editor::run(Doc::open(&path)?, None, Some(path), target)
         }
-        Cmd::OpenFromClipboard => editor::run(Doc::new(share::clipboard_image()?), None, None),
+        Cmd::OpenFromClipboard => editor::run(Doc::new(share::clipboard_image()?), None, None, None),
         Cmd::AddQuickAccessOverlay { filepath, history } => {
             let id = match (history, filepath) {
                 (Some(id), _) => id,
@@ -442,6 +449,25 @@ mod tests {
         for cmd in shortcuts.chain(menu) {
             assert!(parse([cmd]).is_some(), "`{cmd}` is not a subcommand");
         }
+    }
+
+    /// A caller such as a clip manager opens a file and asks where the edit must land.
+    #[test]
+    fn open_annotate_takes_a_save_destination() {
+        let Some(Cmd::OpenAnnotate { filepath, history, save_to, overwrite }) =
+            parse(["open-annotate", "--filepath", "C:\\clips\\one.png", "--save-to", "C:\\clips\\edited.png"])
+        else {
+            panic!("--save-to does not parse");
+        };
+        assert_eq!(filepath.as_deref(), Some(std::path::Path::new("C:\\clips\\one.png")));
+        assert_eq!(save_to.as_deref(), Some(std::path::Path::new("C:\\clips\\edited.png")));
+        assert!(history.is_none() && !overwrite);
+        let Some(Cmd::OpenAnnotate { overwrite, save_to, .. }) = parse(["open-annotate", "--filepath", "a.png", "--overwrite"]) else {
+            panic!("--overwrite does not parse");
+        };
+        assert!(overwrite && save_to.is_none());
+        // Both name a destination: one or the other, never a silent winner.
+        assert!(parse(["open-annotate", "--filepath", "a.png", "--overwrite", "--save-to", "b.png"]).is_none());
     }
 
     #[test]

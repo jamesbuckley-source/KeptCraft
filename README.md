@@ -38,13 +38,39 @@ Running `shotcraft` with no subcommand starts the tray daemon with global shortc
 | `capture-window`, `self-timer` | `--action` |
 | `scrolling-capture` | `--x --y --width --height --display --start --autoscroll` |
 | `capture-text` | `--filepath --x --y --width --height --display --linebreaks true\|false` |
-| `pin`, `open-annotate`, `add-quick-access-overlay` | `--filepath` |
+| `pin`, `add-quick-access-overlay` | `--filepath` |
+| `open-annotate` | `--filepath --save-to PATH --overwrite` |
 | `open-from-clipboard`, `open-history`, `restore-recently-closed` | |
 | `open-settings` | `--tab general\|shortcuts\|quickaccess\|screenshots\|cloud\|advanced\|about` |
 | `mcp` | Serves AI agents over stdin and stdout, see below |
 
 Coordinates are pixels of the chosen display with the origin at its top-left corner.
 `--display 1` is the main display.
+
+## Use with Kept (or another clip manager)
+
+Kept, and any app that stores images, can hand a file to `open-annotate` and get the edit back at a
+path it already knows, instead of watching the save folder for a new file:
+
+```sh
+shotcraft open-annotate --filepath "C:\clips\shot.png" --save-to "C:\clips\shot-edited.png"
+shotcraft open-annotate --filepath "C:\clips\shot.png" --overwrite
+```
+
+- `--save-to PATH` makes Save write that file, creating its folder when missing. A name without an
+  extension gets the configured format's.
+- `--overwrite` saves back over the file being annotated.
+- Both print the saved path on stdout, one line per save, so the caller can pick up the result
+  without guessing.
+- The file is written beside the target and renamed over it, so a watcher never opens a half-written
+  image. Saving twice replaces the same file.
+- Save As and the other editor actions keep working; they do not move the destination.
+
+Kept's image editor setting takes the whole command line, so point it at:
+
+```text
+"C:\Program Files\ShotCraft\shotcraft.exe" open-annotate --filepath {file} --overwrite
+```
 
 ## Use with AI agents
 

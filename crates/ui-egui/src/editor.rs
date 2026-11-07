@@ -42,19 +42,19 @@ enum Tool {
     Spotlight,
 }
 
-const TOOLS: [(Tool, &str, &str, Key); 12] = [
-    (Tool::Select, icon::CURSOR, "Select (V)", Key::V),
-    (Tool::Rect, icon::SQUARE, "Rectangle (R)", Key::R),
-    (Tool::FilledRect, icon::RECTANGLE, "Filled rectangle (F)", Key::F),
-    (Tool::Ellipse, icon::CIRCLE, "Ellipse (O)", Key::O),
-    (Tool::Line, icon::LINE_SEGMENT, "Line (L)", Key::L),
-    (Tool::Arrow, icon::ARROW_UP_RIGHT, "Arrow (A)", Key::A),
-    (Tool::Text, icon::TEXT_T, "Text (T)", Key::T),
-    (Tool::Redact, icon::CHECKERBOARD, "Pixelate / Blur (P)", Key::P),
-    (Tool::Spotlight, icon::FLASHLIGHT, "Spotlight (S)", Key::S),
-    (Tool::Counter, icon::NUMBER_CIRCLE_ONE, "Counter (N)", Key::N),
-    (Tool::Pen, icon::PENCIL_SIMPLE, "Pencil (D)", Key::D),
-    (Tool::Highlighter, icon::HIGHLIGHTER, "Highlighter (H)", Key::H),
+const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
+    (Tool::Select, theme::ToolIcon::Glyph(icon::CURSOR), "Select (V)", Key::V),
+    (Tool::Rect, theme::ToolIcon::Glyph(icon::SQUARE), "Rectangle (R)", Key::R),
+    (Tool::FilledRect, theme::ToolIcon::FilledSquare, "Filled rectangle (F)", Key::F),
+    (Tool::Ellipse, theme::ToolIcon::Glyph(icon::CIRCLE), "Ellipse (O)", Key::O),
+    (Tool::Line, theme::ToolIcon::Glyph(icon::LINE_SEGMENT), "Line (L)", Key::L),
+    (Tool::Arrow, theme::ToolIcon::Glyph(icon::ARROW_UP_RIGHT), "Arrow (A)", Key::A),
+    (Tool::Text, theme::ToolIcon::Glyph(icon::TEXT_T), "Text (T)", Key::T),
+    (Tool::Redact, theme::ToolIcon::Glyph(icon::CHECKERBOARD), "Pixelate / Blur (P)", Key::P),
+    (Tool::Spotlight, theme::ToolIcon::Glyph(icon::FLASHLIGHT), "Spotlight (S)", Key::S),
+    (Tool::Counter, theme::ToolIcon::Glyph(icon::NUMBER_CIRCLE_ONE), "Counter (N)", Key::N),
+    (Tool::Pen, theme::ToolIcon::Glyph(icon::PENCIL_SIMPLE), "Pencil (D)", Key::D),
+    (Tool::Highlighter, theme::ToolIcon::Glyph(icon::HIGHLIGHTER), "Highlighter (H)", Key::H),
 ];
 
 #[derive(Clone)]
@@ -666,7 +666,7 @@ impl Editor {
             }
             ui.separator();
             for (tool, ic, tip, _) in TOOLS {
-                if theme::tool_button(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
+                if theme::tool_button_icon(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
                     self.select_tool(tool);
                 }
             }

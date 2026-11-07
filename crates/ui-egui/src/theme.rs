@@ -70,8 +70,21 @@ pub fn hud_frame() -> Frame {
     Frame::new().fill(HUD_FILL).corner_radius(14).inner_margin(Margin::same(8)).stroke(Stroke::new(1.0, Color32::from_white_alpha(28)))
 }
 
+/// A tool button's icon: a Phosphor glyph, or a shape for a tool no glyph tells apart from its neighbour.
+#[derive(Clone, Copy)]
+pub enum ToolIcon<'a> {
+    Glyph(&'a str),
+    /// A filled square, for the filled-rectangle tool. Phosphor's fill variant would mean a second
+    /// 439 KB font for the one glyph, and its outline rectangle reads as another outline tool.
+    FilledSquare,
+}
+
 /// Square-ish tool button: phosphor icon with an optional caption underneath.
 pub fn tool_button(ui: &mut Ui, icon: &str, caption: Option<&str>, selected: bool, hud: bool) -> Response {
+    tool_button_icon(ui, ToolIcon::Glyph(icon), caption, selected, hud)
+}
+
+pub fn tool_button_icon(ui: &mut Ui, icon: ToolIcon<'_>, caption: Option<&str>, selected: bool, hud: bool) -> Response {
     let size = if caption.is_some() { vec2(78.0, 54.0) } else { vec2(32.0, 30.0) };
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let visuals = ui.visuals();
@@ -84,14 +97,21 @@ pub fn tool_button(ui: &mut Ui, icon: &str, caption: Option<&str>, selected: boo
         painter.rect_filled(rect, 8, hover_bg);
     }
     let color = if selected { Color32::WHITE } else { fg };
+    let paint = |center: egui::Pos2, size: f32| match icon {
+        ToolIcon::Glyph(glyph) => {
+            painter.text(center, Align2::CENTER_CENTER, glyph, FontId::proportional(size), color);
+        }
+        // Sized to the box of the outline glyph it sits next to, so the two read as a pair.
+        ToolIcon::FilledSquare => {
+            painter.rect_filled(egui::Rect::from_center_size(center, Vec2::splat(size * 0.75)), CornerRadius::same(2), color);
+        }
+    };
     match caption {
         Some(text) => {
-            painter.text(rect.center_top() + vec2(0.0, 17.0), Align2::CENTER_CENTER, icon, FontId::proportional(20.0), color);
+            paint(rect.center_top() + vec2(0.0, 17.0), 20.0);
             painter.text(rect.center_bottom() - vec2(0.0, 13.0), Align2::CENTER_CENTER, text, FontId::proportional(12.5), color);
         }
-        None => {
-            painter.text(rect.center(), Align2::CENTER_CENTER, icon, FontId::proportional(18.0), color);
-        }
+        None => paint(rect.center(), 18.0),
     }
     resp
 }

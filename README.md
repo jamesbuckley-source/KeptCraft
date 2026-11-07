@@ -72,6 +72,17 @@ Kept's image editor setting takes the whole command line, so point it at:
 "C:\Program Files\ShotCraft\shotcraft.exe" open-annotate --filepath {file} --overwrite
 ```
 
+### Defaults in this fork
+
+A fresh install is already set up for Kept; Settings changes any of it:
+
+| Setting | Default | Why |
+|---|---|---|
+| Copy after capture | on | Every capture lands in Kept's history without a second keystroke |
+| Save folder | `Pictures\ShotCraft` | Captures stay off the Desktop, and Kept watches this folder for edits |
+| Quick Access | closes after 10 s | The clip is already in Kept; the card is there to annotate |
+| Shortcuts | `Ctrl+Shift+2`…`Ctrl+Shift+8`, `Ctrl+Shift+H` | Kept owns `Alt+V` and `Alt+Shift+V`, and Windows switches keyboard layouts on `Alt+Shift` |
+
 ## Use with AI agents
 
 `shotcraft mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io), so an agent such as Claude Code, Codex or Cursor can capture the screen, read text and hand captures back to you.

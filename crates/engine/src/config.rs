@@ -131,16 +131,18 @@ pub struct Hotkeys {
 
 impl Default for Hotkeys {
     fn default() -> Self {
+        // Kept owns Alt+V and Alt+Shift+V, and Windows switches keyboard layouts on Alt+Shift,
+        // so every default lives on Ctrl+Shift.
         Self {
-            all_in_one: "Alt+Shift+Digit5".into(),
-            capture_area: "Alt+Shift+Digit4".into(),
-            capture_previous_area: "Alt+Shift+Digit8".into(),
-            capture_fullscreen: "Alt+Shift+Digit3".into(),
-            capture_window: "Alt+Shift+Digit6".into(),
-            scrolling_capture: "Alt+Shift+Digit7".into(),
+            all_in_one: "Ctrl+Shift+Digit5".into(),
+            capture_area: "Ctrl+Shift+Digit4".into(),
+            capture_previous_area: "Ctrl+Shift+Digit8".into(),
+            capture_fullscreen: "Ctrl+Shift+Digit3".into(),
+            capture_window: "Ctrl+Shift+Digit6".into(),
+            scrolling_capture: "Ctrl+Shift+Digit7".into(),
             self_timer: String::new(),
-            capture_text: "Alt+Shift+Digit2".into(),
-            open_history: "Alt+Shift+KeyH".into(),
+            capture_text: "Ctrl+Shift+Digit2".into(),
+            open_history: "Ctrl+Shift+KeyH".into(),
             restore_recently_closed: String::new(),
         }
     }
@@ -220,19 +222,23 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        let save_dir = dirs::desktop_dir().or_else(dirs::picture_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir);
+        // Captures get a folder of their own: a Kept user should not find them on the Desktop, and
+        // Kept watches this folder for edits (it reads `save_dir` from settings.json).
+        let save_dir = dirs::picture_dir().or_else(dirs::desktop_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("ShotCraft");
         Self {
             save_dir,
             export_format: ExportFormat::Png,
             jpeg_quality: 90,
             show_quick_access: true,
-            copy_after_capture: false,
+            // Every capture reaches Kept through the clipboard without a second action.
+            copy_after_capture: true,
             save_after_capture: false,
             show_crosshair: true,
             show_magnifier: true,
             window_style: WindowCaptureStyle::Shadow,
             quick_access_side: QuickAccessSide::Left,
-            quick_access_auto_close: 0,
+            // The clip is already in Kept, so the card is a way to annotate rather than a keeper.
+            quick_access_auto_close: 10,
             close_quick_access_after_action: true,
             timer_seconds: 5,
             ocr_keep_linebreaks: true,
@@ -363,6 +369,20 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fork's defaults are shaped for Kept, so a fresh install needs no settings trip first.
+    #[test]
+    fn defaults_suit_a_clip_manager() {
+        let s = Settings::default();
+        assert!(s.copy_after_capture, "a capture should reach Kept without a second action");
+        assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("ShotCraft"), "captures get their own folder, not the Desktop");
+        assert!(s.quick_access_auto_close > 0, "the card should not linger once the clip is in Kept");
+        // Kept binds Alt+V and Alt+Shift+V, and Windows switches keyboard layouts on Alt+Shift.
+        let keys = s.hotkeys.entries().into_iter().map(|(_, key)| key).filter(|key| !key.is_empty());
+        for key in keys {
+            assert!(key.starts_with("Ctrl+Shift+"), "{key} leaves the modifier family Kept and Windows use");
+        }
+    }
 
     #[test]
     fn merge_keeps_fields_other_windows_changed() {

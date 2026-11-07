@@ -4,6 +4,14 @@ ShotCraft is a cross-platform screenshot tool written in Rust only.
 The UI is native egui/eframe (glow renderer).
 Never add Tauri, Electron or any webview or JavaScript UI layer.
 
+## Fork: defaults shaped for Kept
+
+This fork is Kept's screenshot editor: captures are copied to the clipboard so Kept's history picks
+them up, they save into `Pictures/ShotCraft`, the Quick Access card closes itself, and every default
+shortcut avoids Kept's `Alt+V`/`Alt+Shift+V` and the `Alt+Shift` layout switch.
+They live in `Settings::default()` and `config::tests::defaults_suit_a_clip_manager`; keep them when
+merging upstream.
+
 ## Workspace map
 
 ```text

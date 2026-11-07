@@ -401,6 +401,7 @@ impl Editor {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title("ShotCraft4Kept — Annotate".to_owned()));
                 }
             }
+            self.kept_menu(ui, &ctx);
             ui.separator();
             if ui.button(format!("{}  Save", icon::FLOPPY_DISK)).on_hover_text("Save (Ctrl/Cmd+S)").clicked() {
                 ui.close();
@@ -415,6 +416,36 @@ impl Editor {
                 ui.close();
                 // The viewport's close request, so unsaved project edits still ask first.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    }
+
+    /// Kept's newest image clips, when the integration is on: one click opens a clip for annotation.
+    fn kept_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if !self.settings.kept.enabled {
+            return;
+        }
+        let Some(kept) = shotcraft_engine::kept::detect() else { return };
+        let clips = match shotcraft_engine::kept::recent_images(&kept, 20) {
+            Ok(clips) => clips,
+            Err(err) => {
+                ui.label(RichText::new("Kept's database is busy").size(12.0)).on_hover_text(format!("{err:#}"));
+                return;
+            }
+        };
+        ui.menu_button(format!("{}  Open from Kept DB", icon::DATABASE), |ui| {
+            ui.set_min_width(340.0);
+            for clip in &clips {
+                if ui.button(clip.label()).on_hover_text(clip.path.display().to_string()).clicked() {
+                    ui.close();
+                    match image::open(&clip.path) {
+                        Ok(image) => {
+                            self.load_document(Doc::new(image.into_rgba8()), None);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Title("Kept clip — ShotCraft4Kept".to_owned()));
+                        }
+                        Err(err) => self.flash(format!("Could not open the Kept clip: {err}")),
+                    }
+                }
             }
         });
     }

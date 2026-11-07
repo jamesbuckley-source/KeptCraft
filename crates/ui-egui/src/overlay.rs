@@ -142,8 +142,11 @@ pub fn run(mode: Mode, preset: Option<Preset>) -> anyhow::Result<Option<Outcome>
         finished: false,
         monitors,
     };
-    let options =
-        eframe::NativeOptions { viewport: monitor_builder(&app.monitors[root], "ShotCraft4Kept capture"), renderer: eframe::Renderer::Glow, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport: monitor_builder(&app.monitors[root], "ShotCraft4Kept capture"),
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
     eframe::run_native(
         "shotcraft-overlay",
         options,

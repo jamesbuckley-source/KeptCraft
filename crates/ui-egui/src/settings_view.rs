@@ -12,6 +12,8 @@ use global_hotkey::hotkey::HotKey;
 
 use shotcraft_engine::config::{self, ExportFormat, QuickAccessSide, Settings, WindowCaptureStyle};
 use shotcraft_engine::doc::fonts;
+use shotcraft_engine::kept;
+use shotcraft_engine::share;
 
 use crate::theme;
 
@@ -19,6 +21,7 @@ use crate::theme;
 enum Tab {
     General,
     Shortcuts,
+    Kept,
     QuickAccess,
     Screenshots,
     Cloud,
@@ -27,9 +30,10 @@ enum Tab {
 }
 
 /// Page, the name `open-settings --tab` takes, sidebar icon and title.
-const TABS: [(Tab, &str, &str, &str); 7] = [
+const TABS: [(Tab, &str, &str, &str); 8] = [
     (Tab::General, "general", icon::GEAR, "General"),
     (Tab::Shortcuts, "shortcuts", icon::KEYBOARD, "Shortcuts"),
+    (Tab::Kept, "kept", icon::CLIPBOARD_TEXT, "Kept"),
     (Tab::QuickAccess, "quickaccess", icon::IMAGE_SQUARE, "Quick Access"),
     (Tab::Screenshots, "screenshots", icon::CAMERA, "Capture"),
     (Tab::Cloud, "cloud", icon::CLOUD_ARROW_UP, "Upload"),
@@ -54,6 +58,8 @@ struct SettingsApp {
     shortcut_error: Option<String>,
     /// The last save failure; cleared by the next successful save.
     error: Option<String>,
+    /// What Kept said about the last integration attempt; not a settings error, so saving keeps it.
+    kept_note: Option<String>,
     headers_text: String,
     icon: Option<TextureHandle>,
 }
@@ -70,6 +76,7 @@ pub fn run(tab: Option<String>) -> anyhow::Result<()> {
         recording: None,
         shortcut_error: None,
         error: None,
+        kept_note: None,
         icon: theme::app_icon(128).map(|(rgba, size)| {
             let size = size as usize;
             ctx.load_texture("app-icon", egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba), egui::TextureOptions::LINEAR)
@@ -484,6 +491,108 @@ impl SettingsApp {
         });
     }
 
+    fn kept(&mut self, ui: &mut Ui) {
+        let detection = kept::detect();
+        match &detection {
+            Some(_) => banner(
+                ui,
+                icon::CHECK_CIRCLE,
+                theme::ACCENT,
+                "Kept is installed. Integration points Kept's image editor at this app and lists its newest clips in the editor's File menu.",
+            ),
+            None => banner(ui, icon::WARNING, theme::WARNING, "Kept was not found. Start Kept once so it writes its configuration, then reopen this page."),
+        };
+        if let Some(note) = self.kept_note.clone() {
+            banner(ui, icon::WARNING, theme::WARNING, &note);
+        }
+        group(ui, "Kept", |rows| {
+            rows.row("Program", None, |ui| match detection.as_ref().and_then(|k| k.exe.clone()) {
+                Some(exe) => ui.label(RichText::new(exe.display().to_string()).monospace()),
+                None => ui.label("not found; the editor command still works if Kept has this path"),
+            });
+            rows.row("Data folder", Some("Where Kept keeps its clips"), |ui| match &detection {
+                Some(k) => ui.label(RichText::new(k.data_dir.display().to_string()).monospace()),
+                None => ui.label("unknown"),
+            });
+            if let Some(k) = &detection {
+                let shown = match kept::image_editor(k) {
+                    Ok(Some(current)) => current,
+                    Ok(None) => "not set".to_owned(),
+                    Err(_) => "Kept's database is busy; try again in a moment".to_owned(),
+                };
+                rows.row("Image editor in Kept", None, |ui| ui.add(egui::Label::new(RichText::new(shown.clone()).monospace()).truncate()).on_hover_text(shown));
+            }
+        });
+        let mut enabled = self.settings.kept.enabled;
+        let mut changed = false;
+        group(ui, "", |rows| {
+            changed =
+                rows.switch("Integrate with Kept", Some("Point Kept's image editor at this app and list its clips in the editor"), &mut enabled).changed();
+        });
+        if changed {
+            self.settings.kept.enabled = enabled;
+            if enabled {
+                self.point_kept_at_this_app(detection.as_ref());
+            }
+        }
+        if self.settings.kept.enabled {
+            let command = std::env::current_exe().map(|exe| kept::editor_command(&exe)).unwrap_or_default();
+            let mut copied = false;
+            group(ui, "Image editor", |rows| {
+                rows.row("Command", Some("Paste it into Kept's Settings, Image editor, if Kept did not take it"), |ui| {
+                    ui.horizontal(|ui| {
+                        copied = ui.small_button("Copy").clicked();
+                        ui.label(RichText::new(command.clone()).monospace());
+                    });
+                });
+            });
+            if copied && let Err(err) = share::copy_text(&command) {
+                self.kept_note = Some(format!("Could not copy the command: {err:#}"));
+            }
+        }
+    }
+
+    /// Write Kept's own `imageEditor` setting, so its "edit" button opens this build.
+    fn point_kept_at_this_app(&mut self, detection: Option<&kept::Kept>) {
+        let Some(k) = detection else {
+            // The clip list still works as soon as Kept has run once, so the switch stays on.
+            self.kept_note = Some("Kept has not written its configuration yet: start Kept once, then switch this off and on.".into());
+            return;
+        };
+        let exe = std::env::current_exe().ok();
+        let Some(exe) = exe else {
+            self.kept_note = Some("could not work out this app's own path".into());
+            return;
+        };
+        let command = kept::editor_command(&exe);
+        if kept::running() {
+            self.kept_note = Some(
+                "Kept is running: it keeps its settings in memory, so it would overwrite the change. Quit Kept and switch this on again, or paste the command below into Kept's Settings, Image editor."
+                    .into(),
+            );
+            return;
+        }
+        match kept::set_image_editor(k, &command) {
+            // Kept holds its settings in memory and rewrites them, so the value is read back: a
+            // write that did not stick is the same to the user as one that failed.
+            Ok(()) => match kept::image_editor(k) {
+                Ok(Some(current)) if current == command => self.kept_note = None,
+                Ok(_) => {
+                    self.kept_note = Some(
+                        "Kept kept its own value (it rewrites its settings while running). Copy the command below into Kept's Settings, Image editor.".into(),
+                    );
+                }
+                Err(err) => {
+                    self.kept_note = Some(format!("Could not read Kept's settings back ({err:#}). Copy the command below into Kept's Settings, Image editor."));
+                }
+            },
+            // A database on a synced drive can refuse another process's write.
+            Err(err) => {
+                self.kept_note = Some(format!("Kept did not take the change ({err:#}). Copy the command below into Kept's Settings, Image editor."));
+            }
+        }
+    }
+
     fn capture(&mut self, ui: &mut Ui) {
         let s = &mut self.settings;
         group(ui, "Selection", |rows| {
@@ -559,9 +668,7 @@ impl SettingsApp {
         group(ui, "", |rows| {
             rows.row("Command line", Some("Every capture mode is also a command"), |ui| ui.label(RichText::new("shotcraft4kept --help").monospace()));
             rows.row("Source code", Some(env!("CARGO_PKG_REPOSITORY")), |ui| copy_button(ui, env!("CARGO_PKG_REPOSITORY"), "link"));
-            rows.row("Upstream", Some("The ShotCraft this fork is built on"), |ui| {
-                copy_button(ui, "https://github.com/mmartinez/shotcraft", "link")
-            });
+            rows.row("Upstream", Some("The ShotCraft this fork is built on"), |ui| copy_button(ui, "https://github.com/mmartinez/shotcraft", "link"));
             rows.row("License", None, |ui| ui.label(env!("CARGO_PKG_LICENSE")));
         });
     }
@@ -593,6 +700,7 @@ impl eframe::App for SettingsApp {
                     match self.tab {
                         Tab::General => self.general(ui),
                         Tab::Shortcuts => self.shortcuts(ui),
+                        Tab::Kept => self.kept(ui),
                         Tab::QuickAccess => self.quick_access(ui),
                         Tab::Screenshots => self.capture(ui),
                         Tab::Cloud => self.upload(ui),

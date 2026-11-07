@@ -21,6 +21,7 @@ image = { workspace = true }
 ocrs = { workspace = true }
 ring = { workspace = true }
 rqrr = { workspace = true }
+rusqlite = { workspace = true }
 rten = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

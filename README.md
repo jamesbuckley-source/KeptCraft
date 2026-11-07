@@ -89,6 +89,23 @@ A fresh install is already set up for Kept; Settings changes any of it:
 | Quick Access | closes after 10 s | The clip is already in Kept; the card is there to annotate |
 | Shortcuts | `Ctrl+Shift+2`…`Ctrl+Shift+8`, `Ctrl+Shift+H` | Kept owns `Alt+V` and `Alt+Shift+V`, and Windows switches keyboard layouts on `Alt+Shift` |
 
+## Kept integration
+
+Settings → Kept finds Kept through its own configuration (`%APPDATA%\ikept.it\storage.json` names the
+data folder, and `kept.exe` sits in `%LOCALAPPDATA%\Kept`). Turning **Integrate with Kept** on gives
+two things:
+
+- **File → Open from Kept DB** in the editor lists the 20 newest image clips straight out of Kept's
+  `copypaste.db`, and opening one loads it for annotation.
+- Kept's **image editor** setting is pointed at this binary, so Kept's edit button opens
+  ShotCraft4Kept's editor with `--overwrite`, and the result lands back in the clip's own file.
+
+The image editor setting lives inside Kept's database, and Kept keeps its settings in memory while it
+runs, so ShotCraft4Kept only writes it when Kept is closed. With Kept running, the page shows the exact
+command to paste into Kept's Settings, Image editor, with a Copy button. Reading the clip list works
+in either case, though a Kept data folder on a synced drive (OneDrive, Google Drive) can be locked for
+a moment while Kept writes; the list says so rather than showing nothing.
+
 ## Use with AI agents
 
 `shotcraft4kept mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io), so an agent such as Claude Code, Codex or Cursor can capture the screen, read text and hand captures back to you.

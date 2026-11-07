@@ -5,6 +5,7 @@
 pub mod capture;
 pub mod config;
 pub mod history;
+pub mod kept;
 pub mod ocr;
 pub mod ops;
 pub mod share;

@@ -192,6 +192,13 @@ impl Default for UploadSettings {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeptSettings {
+    /// Point Kept's image editor at this binary, and offer its recent clips in the editor.
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Preset {
     pub name: String,
@@ -219,6 +226,7 @@ pub struct Settings {
     pub history_days: u32,
     pub hotkeys: Hotkeys,
     pub upload: UploadSettings,
+    pub kept: KeptSettings,
     pub presets: Vec<Preset>,
     pub palette: Vec<[u8; 4]>,
 }
@@ -248,6 +256,7 @@ impl Default for Settings {
             history_days: 30,
             hotkeys: Hotkeys::default(),
             upload: UploadSettings::default(),
+            kept: KeptSettings::default(),
             presets: Vec::new(),
             palette: vec![
                 [255, 59, 48, 255],
@@ -270,16 +279,18 @@ impl Settings {
         }
         // The fork was named ShotCraft until the rename: a fresh folder inherits those settings, so the
         // save folder, palette and the Kept editor path survive it.
-        home_override()
+        let legacy = home_override()
             .is_none()
             .then(|| dirs::config_dir().map(|d| d.join(LEGACY_APP_DIR).join("settings.json")))
             .flatten()
-            .and_then(|legacy| read_json(&legacy))
-            .map(|settings: Self| {
+            .and_then(|legacy| read_json::<Self>(&legacy));
+        match legacy {
+            Some(settings) => {
                 let _ = settings.save();
                 settings
-            })
-            .unwrap_or_default()
+            }
+            None => Self::default(),
+        }
     }
 
     pub fn save(&self) -> Result<()> {

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ecolor::Color32;
-use emath::{Align2, Pos2, Rect, Vec2, pos2, vec2};
+use emath::{Align, Align2, Pos2, Rect, Vec2, pos2, vec2};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 
@@ -413,6 +413,102 @@ pub enum BgFill {
     Blurred,
 }
 
+/// Where a watermark sits on the canvas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Anchor {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl Anchor {
+    pub const ALL: [Anchor; 9] = [
+        Anchor::TopLeft,
+        Anchor::TopCenter,
+        Anchor::TopRight,
+        Anchor::MiddleLeft,
+        Anchor::MiddleCenter,
+        Anchor::MiddleRight,
+        Anchor::BottomLeft,
+        Anchor::BottomCenter,
+        Anchor::BottomRight,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Anchor::TopLeft => "Top left",
+            Anchor::TopCenter => "Top centre",
+            Anchor::TopRight => "Top right",
+            Anchor::MiddleLeft => "Left",
+            Anchor::MiddleCenter => "Centre",
+            Anchor::MiddleRight => "Right",
+            Anchor::BottomLeft => "Bottom left",
+            Anchor::BottomCenter => "Bottom centre",
+            Anchor::BottomRight => "Bottom right",
+        }
+    }
+}
+
+/// A logo or mark drawn over the finished capture, placed against an edge and then dragged.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Watermark {
+    #[serde(with = "png_b64")]
+    pub image: Arc<RgbaImage>,
+    pub anchor: Anchor,
+    /// Width as a fraction of the canvas width, so the mark keeps its proportion.
+    pub width: f32,
+    /// Where the user dragged it from the anchored spot, in canvas pixels.
+    pub offset: Vec2,
+    /// 0 = invisible, 1 = opaque.
+    pub opacity: f32,
+}
+
+impl Watermark {
+    pub fn new(image: RgbaImage) -> Self {
+        Self { image: Arc::new(image), anchor: Anchor::BottomRight, width: 0.18, offset: Vec2::ZERO, opacity: 0.9 }
+    }
+
+    /// Where the mark lands on a canvas of `canvas` pixels: the anchor's spot inset by `margin`,
+    /// moved by the user's `offset`, sized by `width`.
+    pub fn rect(&self, canvas: Vec2, margin: f32) -> Rect {
+        let img = &self.image;
+        let w = (self.width.clamp(0.02, 1.0) * canvas.x).max(1.0);
+        let h = (w * img.height() as f32 / img.width().max(1) as f32).max(1.0);
+        let place = |avail: f32, len: f32, align: Align| match align {
+            Align::Min => margin,
+            Align::Center => (avail - len) / 2.0,
+            Align::Max => avail - len - margin,
+        };
+        let (ax, ay) = (self.anchor.x(), self.anchor.y());
+        let min = pos2(place(canvas.x, w, ax), place(canvas.y, h, ay)) + self.offset;
+        Rect::from_min_size(min, vec2(w, h))
+    }
+}
+
+impl Anchor {
+    fn x(self) -> Align {
+        match self {
+            Anchor::TopLeft | Anchor::MiddleLeft | Anchor::BottomLeft => Align::Min,
+            Anchor::TopCenter | Anchor::MiddleCenter | Anchor::BottomCenter => Align::Center,
+            Anchor::TopRight | Anchor::MiddleRight | Anchor::BottomRight => Align::Max,
+        }
+    }
+
+    fn y(self) -> Align {
+        match self {
+            Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => Align::Min,
+            Anchor::MiddleLeft | Anchor::MiddleCenter | Anchor::MiddleRight => Align::Center,
+            Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => Align::Max,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Background {
     pub fill: BgFill,
@@ -426,11 +522,23 @@ pub struct Background {
     pub align: Align2,
     /// Trim uneven uniform margins so content sits evenly inside the padding.
     pub auto_balance: bool,
+    /// A logo drawn over the finished image, dragged into place.
+    #[serde(default)]
+    pub watermark: Option<Watermark>,
 }
 
 impl Default for Background {
     fn default() -> Self {
-        Self { fill: BgFill::Gradient(3), padding: 64.0, radius: 12.0, shadow: 0.5, aspect: Aspect::Auto, align: Align2::CENTER_CENTER, auto_balance: true }
+        Self {
+            fill: BgFill::Gradient(3),
+            padding: 64.0,
+            radius: 12.0,
+            shadow: 0.5,
+            aspect: Aspect::Auto,
+            align: Align2::CENTER_CENTER,
+            auto_balance: true,
+            watermark: None,
+        }
     }
 }
 
@@ -639,6 +747,25 @@ mod tests {
         let single = OwnedGradient { angle: 0.0, stops: vec![GradientStop { at: 0.0, color: [1, 2, 3, 255] }] };
         assert_eq!(single.sorted_stops().len(), 2);
         assert_eq!(single.color_at(0.7), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn watermark_rects_follow_the_anchor_and_the_drag() {
+        let mark = |anchor, offset| Watermark {
+            image: Arc::new(RgbaImage::from_pixel(10, 5, image::Rgba([255, 255, 255, 255]))),
+            anchor,
+            width: 0.2,
+            offset,
+            opacity: 1.0,
+        };
+        let canvas = vec2(100.0, 100.0);
+        // 20 px wide, 10 px tall (the image is 2:1), inset by the margin.
+        let top_left = mark(Anchor::TopLeft, Vec2::ZERO).rect(canvas, 10.0);
+        assert_eq!((top_left.min, top_left.max), (pos2(10.0, 10.0), pos2(30.0, 20.0)));
+        let centre = mark(Anchor::MiddleCenter, Vec2::ZERO).rect(canvas, 10.0);
+        assert_eq!((centre.min, centre.max), (pos2(40.0, 45.0), pos2(60.0, 55.0)));
+        let dragged = mark(Anchor::BottomRight, vec2(-5.0, -8.0)).rect(canvas, 10.0);
+        assert_eq!((dragged.min, dragged.max), (pos2(65.0, 72.0), pos2(85.0, 82.0)));
     }
 
     #[test]

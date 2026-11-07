@@ -19,7 +19,7 @@ stays close enough to merge from upstream.
 | Area, previous area, fullscreen, window capture | `capture-area`, `capture-previous-area`, `capture-fullscreen`, `capture-window` over a frozen screen, with crosshair and magnifier; windows can get a shadow or a background |
 | Self-timer | `self-timer`: select, then a countdown beside the region |
 | Annotate, redact and polish | Editor with arrow (4 styles, curved), rectangle, filled rectangle, ellipse, line, pen with smoothing, highlighter, text (7 styles), counter, spotlight, blur, pixelate and solid redaction, crop with aspect ratios, image drop-in, colour palette and picker |
-| Background tool | Gradients (built-in and your own, with as many colours as you like), solid, image and blurred fills, padding, corner radius, shadow, aspect ratio, alignment, auto-balance, saved presets |
+| Background tool | Gradients (built-in and your own, with as many colours as you like), solid, image and blurred fills, padding, corner radius, shadow, aspect ratio, alignment, auto-balance, a draggable image watermark, saved presets |
 | Editable project files | `.shotcraft` (JSON with the base image and every annotation) |
 | Scrolling capture | Stitches frames while you or auto-scroll move the content |
 | Quick Access Overlay | Floating card after each capture: copy, save, annotate, pin, upload, OCR, or drag the file into another app |

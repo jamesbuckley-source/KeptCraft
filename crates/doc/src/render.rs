@@ -11,8 +11,8 @@ use tiny_skia::{
 
 use crate::effects::{self, IRect};
 use crate::model::{
-    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, arrow_head_len, curve_control, curve_point,
-    highlighter_width, text_padding,
+    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, Watermark, arrow_head_len, curve_control,
+    curve_point, highlighter_width, text_padding,
 };
 use crate::{Error, Result, fonts};
 
@@ -533,7 +533,23 @@ fn compose_background(content: &Pixmap, bg: &Background, s: f32) -> Result<(Pixm
         mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
     }
     canvas.draw_pixmap(offset.x as i32, offset.y as i32, content.as_ref(), &PixmapPaint::default(), Transform::identity(), Some(&mask));
+    if let Some(watermark) = &bg.watermark {
+        draw_watermark(&mut canvas, watermark, bg.padding * s)?;
+    }
     Ok((canvas, offset))
+}
+
+/// Draw the watermark over the finished canvas: anchored to an edge inset by the padding, moved by
+/// the user's drag, with its own opacity.
+fn draw_watermark(canvas: &mut Pixmap, watermark: &Watermark, margin: f32) -> Result<()> {
+    let src = rgba_to_pixmap(&watermark.image)?;
+    let (w, h) = (canvas.width() as f32, canvas.height() as f32);
+    let rect = watermark.rect(vec2(w, h), margin);
+    let paint = PixmapPaint { opacity: watermark.opacity.clamp(0.0, 1.0), quality: FilterQuality::Bilinear, ..Default::default() };
+    let scale = Transform::from_scale(rect.width() / src.width().max(1) as f32, rect.height() / src.height().max(1) as f32);
+    let place = Transform::from_translate(rect.min.x, rect.min.y);
+    canvas.draw_pixmap(0, 0, src.as_ref(), &paint, place.pre_concat(scale), None);
+    Ok(())
 }
 
 /// Soft drop shadow, blurred at quarter resolution and scaled up.
@@ -701,6 +717,27 @@ mod tests {
         assert!(left[0] > 200 && left[2] < 60, "left edge is red: {left:?}");
         assert!(right[2] > 200 && right[0] < 60, "right edge is blue: {right:?}");
         assert_eq!(out.get_pixel(30, 30).0, [0, 0, 0, 255], "the screenshot keeps its own pixels");
+    }
+
+    #[test]
+    fn a_watermark_is_painted_over_the_finished_image() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(40, 40, image::Rgba([0, 0, 0, 255])));
+        let mark = Watermark::new(RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])));
+        doc.background = Some(Background {
+            fill: BgFill::Solid(Color32::BLACK),
+            padding: 10.0,
+            radius: 0.0,
+            shadow: 0.0,
+            auto_balance: false,
+            watermark: Some(mark),
+            ..Default::default()
+        });
+        let out = flatten(&doc).unwrap();
+        assert_eq!(out.dimensions(), (60, 60));
+        let lit: Vec<(u32, u32)> = (0..60).flat_map(|x| (0..60).map(move |y| (x, y))).filter(|&(x, y)| out.get_pixel(x, y).0[0] > 200).collect();
+        assert!(lit.len() > 20, "the mark is drawn: {} pixels", lit.len());
+        let (min_x, min_y) = lit.iter().fold((60, 60), |(mx, my), &(x, y)| (mx.min(x), my.min(y)));
+        assert!(min_x > 30 && min_y > 30, "bottom right by default, got {min_x},{min_y}");
     }
 
     #[test]

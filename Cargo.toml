@@ -32,7 +32,7 @@ emath = { version = "0.36", features = ["serde"] }
 enigo = "0.6"
 epaint_default_fonts = "0.36"
 global-hotkey = "0.8"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 ocrs = "0.13"
 raw-window-handle = "0.6"
 rfd = "0.17"

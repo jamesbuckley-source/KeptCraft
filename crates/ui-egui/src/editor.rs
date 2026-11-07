@@ -19,8 +19,8 @@ use image::RgbaImage;
 use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
-    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle,
-    constrain_aspect,
+    Anchor, ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle,
+    Watermark, constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -68,10 +68,25 @@ struct Snapshot {
 
 #[derive(Clone, Copy)]
 enum EditDrag {
-    Create { index: usize, start: Pos2 },
-    Move { index: usize, last: Pos2 },
-    Handle { index: usize, handle: usize },
-    Pan { last: Pos2 },
+    Create {
+        index: usize,
+        start: Pos2,
+    },
+    Move {
+        index: usize,
+        last: Pos2,
+    },
+    Handle {
+        index: usize,
+        handle: usize,
+    },
+    Pan {
+        last: Pos2,
+    },
+    /// Dragging the watermark, in composed-canvas coordinates.
+    Watermark {
+        last: Pos2,
+    },
 }
 
 enum CropAction {
@@ -119,6 +134,12 @@ impl View {
     fn to_screen(self, b: Pos2) -> Pos2 {
         let out = self.offset + (b - self.region.min) * self.out_scale;
         self.img_rect.min + out * (self.img_rect.width() / self.out_size.x)
+    }
+
+    /// Where a screen point lands on the composed canvas, background included.
+    fn to_canvas(self, p: Pos2) -> Pos2 {
+        let v: Vec2 = (p - self.img_rect.min) * (self.out_size.x / self.img_rect.width());
+        pos2(v.x, v.y)
     }
 
     /// Screen points per base pixel.
@@ -1241,6 +1262,7 @@ impl Editor {
                 }
             }
         });
+        self.watermark_section(ui);
         let Some(bg) = self.doc.background.clone() else { return };
         ui.add_space(8.0);
         let mut b = bg.clone();
@@ -1289,6 +1311,102 @@ impl Editor {
                 self.checkpoint();
             }
             self.doc.background = Some(b);
+            self.touch();
+        }
+    }
+
+    /// The watermark's box in background pixels, if a click at `canvas` lands on it.
+    fn watermark_hit(&self, canvas: Pos2) -> Option<Rect> {
+        let bg = self.doc.background.as_ref()?;
+        let watermark = bg.watermark.as_ref()?;
+        let (size, _) = render::background_layout(self.base_size(), bg, 1.0);
+        let k = size.x / self.view.out_size.x.max(1.0);
+        let rect = watermark.rect(size, bg.padding);
+        rect.contains(pos2(canvas.x * k, canvas.y * k)).then_some(rect)
+    }
+
+    /// Canvas pixels per background pixel: a drag measured on screen has to move the stored offset
+    /// by this much.
+    fn watermark_scale(&self) -> Option<f32> {
+        let bg = self.doc.background.as_ref()?;
+        bg.watermark.as_ref()?;
+        let (size, _) = render::background_layout(self.base_size(), bg, 1.0);
+        Some(size.x / self.view.out_size.x.max(1.0))
+    }
+
+    fn base_size(&self) -> Vec2 {
+        let size = self.doc.full_rect().size();
+        vec2(size.x.max(1.0), size.y.max(1.0))
+    }
+
+    /// Watermark section of the background panel: add, place, size and remove the mark.
+    fn watermark_section(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Watermark").strong());
+        let Some(bg) = self.doc.background.clone() else {
+            ui.label(RichText::new("Turn the background on to add a watermark.").color(ui.visuals().weak_text_color()));
+            return;
+        };
+        let Some(mut mark) = bg.watermark.clone() else {
+            if ui.button(format!("{} Add image…", icon::IMAGE)).clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file()
+            {
+                match image::open(&path) {
+                    Ok(img) => {
+                        self.checkpoint();
+                        let mut bg = bg.clone();
+                        bg.watermark = Some(Watermark::new(img.into_rgba8()));
+                        self.doc.background = Some(bg);
+                        self.touch();
+                    }
+                    Err(err) => self.flash(format!("Could not open the watermark: {err}")),
+                }
+            }
+            return;
+        };
+        let mut changed = false;
+        let mut removed = false;
+        egui::Grid::new("wm-anchor").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+            for row in 0..3 {
+                for col in 0..3 {
+                    let anchor = Anchor::ALL[row * 3 + col];
+                    let chosen = mark.anchor == anchor;
+                    let glyph = RichText::new(if chosen { icon::RADIO_BUTTON } else { icon::CIRCLE }).color(if chosen {
+                        theme::ACCENT
+                    } else {
+                        ui.visuals().weak_text_color()
+                    });
+                    if ui.add(egui::Button::new(glyph).small().frame(false)).on_hover_text(anchor.label()).clicked() {
+                        mark.anchor = anchor;
+                        // A new spot starts from the padding, without the old drag.
+                        mark.offset = Vec2::ZERO;
+                        changed = true;
+                    }
+                }
+                ui.end_row();
+            }
+        });
+        changed |= ui.add(egui::Slider::new(&mut mark.width, 0.04..=0.6).text("Size")).changed();
+        changed |= ui.add(egui::Slider::new(&mut mark.opacity, 0.05..=1.0).text("Opacity")).changed();
+        ui.horizontal(|ui| {
+            if ui.button(format!("{} Remove", icon::TRASH)).clicked() {
+                removed = true;
+            }
+            ui.label(RichText::new("Drag it on the image to move it").color(ui.visuals().weak_text_color()));
+        });
+        if removed {
+            self.checkpoint();
+            let mut bg = bg.clone();
+            bg.watermark = None;
+            self.doc.background = Some(bg);
+            self.touch();
+        } else if changed {
+            if !ui.ctx().input(|i| i.pointer.any_down()) || self.undo.last().is_none_or(|s| s.background.as_ref() != Some(&bg)) {
+                self.checkpoint();
+            }
+            let mut bg = bg.clone();
+            bg.watermark = Some(mark);
+            self.doc.background = Some(bg);
             self.touch();
         }
     }
@@ -1362,12 +1480,18 @@ impl Editor {
             self.commit_text();
             let start = ctx.input(|i| i.pointer.press_origin()).unwrap_or_default();
             let b = view.to_base(start);
+            let canvas_point = view.to_canvas(start);
+            let on_watermark = self.watermark_hit(canvas_point).is_some();
             let handle = self.selected.and_then(|i| {
                 let it = self.doc.items.get(i)?;
                 it.handles().iter().position(|h| h.distance(b) <= tol * 1.5).map(|h| (i, h))
             });
             self.drag = if middle {
                 Some(EditDrag::Pan { last: start })
+            } else if on_watermark {
+                // The watermark sits on top of the annotations, so it gets the drag first.
+                self.checkpoint();
+                Some(EditDrag::Watermark { last: canvas_point })
             } else if let Some((index, handle)) = handle {
                 self.checkpoint();
                 Some(EditDrag::Handle { index, handle })
@@ -1406,6 +1530,16 @@ impl Editor {
                     if let Some(it) = self.doc.items.get_mut(index) {
                         it.translate(b - last);
                         self.drag = Some(EditDrag::Move { index, last: b });
+                        self.touch();
+                    }
+                }
+                EditDrag::Watermark { last } => {
+                    let c = view.to_canvas(p);
+                    if let Some(k) = self.watermark_scale()
+                        && let Some(watermark) = self.doc.background.as_mut().and_then(|bg| bg.watermark.as_mut())
+                    {
+                        watermark.offset += (c - last) * k;
+                        self.drag = Some(EditDrag::Watermark { last: c });
                         self.touch();
                     }
                 }

@@ -60,7 +60,7 @@ struct SettingsApp {
 
 pub fn run(tab: Option<String>) -> anyhow::Result<()> {
     let tab = tab.and_then(|t| TABS.iter().find(|x| x.1 == t.to_ascii_lowercase()).map(|x| x.0)).unwrap_or(Tab::General);
-    let builder = egui::ViewportBuilder::default().with_title("ShotCraft Settings").with_inner_size(vec2(780.0, 560.0)).with_resizable(false);
+    let builder = egui::ViewportBuilder::default().with_title("ShotCraft4Kept Settings").with_inner_size(vec2(780.0, 560.0)).with_resizable(false);
     let settings = Settings::load();
     theme::run("shotcraft-settings", builder, move |ctx| SettingsApp {
         headers_text: settings.upload.headers.join("\n"),
@@ -550,14 +550,18 @@ impl SettingsApp {
             }
             ui.vertical(|ui| {
                 ui.add_space(6.0);
-                ui.label(RichText::new("ShotCraft").font(medium(18.0)).color(ui.visuals().strong_text_color()));
+                ui.label(RichText::new("ShotCraft4Kept").font(medium(18.0)).color(ui.visuals().strong_text_color()));
                 ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(ui.visuals().weak_text_color()));
-                ui.label("Capture, annotate, redact and share screenshots.");
+                ui.label("A ShotCraft fork that works with the Kept clipboard manager.");
+                ui.label(RichText::new("Capture, annotate, redact and share screenshots.").color(ui.visuals().weak_text_color()));
             });
         });
         group(ui, "", |rows| {
-            rows.row("Command line", Some("Every capture mode is also a command"), |ui| ui.label(RichText::new("shotcraft --help").monospace()));
+            rows.row("Command line", Some("Every capture mode is also a command"), |ui| ui.label(RichText::new("shotcraft4kept --help").monospace()));
             rows.row("Source code", Some(env!("CARGO_PKG_REPOSITORY")), |ui| copy_button(ui, env!("CARGO_PKG_REPOSITORY"), "link"));
+            rows.row("Upstream", Some("The ShotCraft this fork is built on"), |ui| {
+                copy_button(ui, "https://github.com/mmartinez/shotcraft", "link")
+            });
             rows.row("License", None, |ui| ui.label(env!("CARGO_PKG_LICENSE")));
         });
     }

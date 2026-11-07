@@ -4541,26 +4541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "shotcraft"
-version = "0.1.0-beta.1"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "embed-manifest",
- "global-hotkey",
- "image",
- "rmcp",
- "serde",
- "serde_json",
- "shotcraft-engine",
- "shotcraft-ui-egui",
- "tokio",
- "tray-icon",
- "winit",
-]
-
-[[package]]
 name = "shotcraft-doc"
 version = "0.1.0-beta.1"
 dependencies = [
@@ -4621,6 +4601,26 @@ dependencies = [
  "rfd",
  "shotcraft-engine",
  "x11rb 0.14.0",
+]
+
+[[package]]
+name = "shotcraft4kept"
+version = "0.1.0-beta.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "embed-manifest",
+ "global-hotkey",
+ "image",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "shotcraft-engine",
+ "shotcraft-ui-egui",
+ "tokio",
+ "tray-icon",
+ "winit",
 ]
 
 [[package]]

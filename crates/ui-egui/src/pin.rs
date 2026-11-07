@@ -44,7 +44,7 @@ pub fn run(source: ImageSource) -> anyhow::Result<()> {
     let fit = (screen.width() * 0.7 / natural.x).min(screen.height() * 0.7 / natural.y).min(1.0);
     let size = (natural * fit).round();
     let pos = screen.center() - size / 2.0;
-    let builder = theme::floating("ShotCraft pin", pos, size).with_resizable(false);
+    let builder = theme::floating("ShotCraft4Kept pin", pos, size).with_resizable(false);
     theme::run("shotcraft-pin", builder, move |_| Pin { image, history_id, tex: None, natural, zoom: fit, opacity: 1.0, settings: Settings::load() })
 }
 

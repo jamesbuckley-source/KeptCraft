@@ -1,6 +1,6 @@
 [package]
-name = "shotcraft"
-description = "Cross-platform screenshot tool: capture, annotate, redact, background, scrolling capture, history, OCR, pin."
+name = "shotcraft4kept"
+description = "ShotCraft4Kept: a screenshot tool for Kept, built on ShotCraft. Capture, annotate, redact, background, scrolling capture, history, OCR, pin."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [[bin]]
-name = "shotcraft"
+name = "shotcraft4kept"
 path = "src/main.rs"
 
 [dependencies]

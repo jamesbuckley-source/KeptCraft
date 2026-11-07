@@ -1,13 +1,19 @@
-# ShotCraft
+# ShotCraft4Kept
 
-A cross-platform (Linux, Windows, macOS) screenshot tool in pure Rust.
-The UI is egui/eframe; there is no webview.
+A screenshot and annotation tool for the [Kept](https://github.com/jamesbuckley-source/kept) clipboard
+manager, built on [ShotCraft](https://github.com/mmartinez/shotcraft) by Miguel Martinez. Pure Rust,
+with an egui/eframe UI and no webview.
 
-![The ShotCraft editor with numbered steps, a callout arrow, a highlighted line and a pixelated secret key on a gradient background](assets/screenshots/editor.png)
+This is a **custom fork**, not upstream ShotCraft: it ships Kept-shaped defaults, saves where Kept
+looks for edits, and adds a File menu, a Kept integration setting and an "Open from Kept DB" list.
+Upstream's documentation below still applies where this fork has not changed something, and the code
+stays close enough to merge from upstream.
+
+![The ShotCraft4Kept editor with numbered steps, a callout arrow, a highlighted line and a pixelated secret key on a gradient background](assets/screenshots/editor.png)
 
 ## Features
 
-| Feature | ShotCraft |
+| Feature | ShotCraft4Kept |
 |---|---|
 | One shortcut, every capture mode (All-In-One) | `all-in-one`: area, fullscreen, window, scrolling, timer and OCR from one bar, with resize handles, typed size and locked aspect ratio |
 | Area, previous area, fullscreen, window capture | `capture-area`, `capture-previous-area`, `capture-fullscreen`, `capture-window` over a frozen screen, with crosshair and magnifier; windows can get a shadow or a background |
@@ -26,8 +32,8 @@ Not covered: hosted cloud sharing with comment threads, screen recording, and hi
 
 ## Commands
 
-Every mode is a subcommand of one binary (`shotcraft capture-area`), so any of them can be bound to an OS shortcut.
-Running `shotcraft` with no subcommand starts the tray daemon with global shortcuts.
+Every mode is a subcommand of one binary (`shotcraft4kept capture-area`), so any of them can be bound to an OS shortcut.
+Running `shotcraft4kept` with no subcommand starts the tray daemon with global shortcuts.
 
 | Command | Options |
 |---|---|
@@ -53,8 +59,8 @@ Kept, and any app that stores images, can hand a file to `open-annotate` and get
 path it already knows, instead of watching the save folder for a new file:
 
 ```sh
-shotcraft open-annotate --filepath "C:\clips\shot.png" --save-to "C:\clips\shot-edited.png"
-shotcraft open-annotate --filepath "C:\clips\shot.png" --overwrite
+shotcraft4kept open-annotate --filepath "C:\clips\shot.png" --save-to "C:\clips\shot-edited.png"
+shotcraft4kept open-annotate --filepath "C:\clips\shot.png" --overwrite
 ```
 
 - `--save-to PATH` makes Save write that file, creating its folder when missing. A name without an
@@ -69,7 +75,7 @@ shotcraft open-annotate --filepath "C:\clips\shot.png" --overwrite
 Kept's image editor setting takes the whole command line, so point it at:
 
 ```text
-"C:\Program Files\ShotCraft\shotcraft.exe" open-annotate --filepath {file} --overwrite
+"C:\Program Files\ShotCraft4Kept\shotcraft4kept.exe" open-annotate --filepath {file} --overwrite
 ```
 
 ### Defaults in this fork
@@ -79,28 +85,28 @@ A fresh install is already set up for Kept; Settings changes any of it:
 | Setting | Default | Why |
 |---|---|---|
 | Copy after capture | on | Every capture lands in Kept's history without a second keystroke |
-| Save folder | `Pictures\ShotCraft` | Captures stay off the Desktop, and Kept watches this folder for edits |
+| Save folder | `Pictures\ShotCraft4Kept` | Captures stay off the Desktop, and Kept watches this folder for edits |
 | Quick Access | closes after 10 s | The clip is already in Kept; the card is there to annotate |
 | Shortcuts | `Ctrl+Shift+2`…`Ctrl+Shift+8`, `Ctrl+Shift+H` | Kept owns `Alt+V` and `Alt+Shift+V`, and Windows switches keyboard layouts on `Alt+Shift` |
 
 ## Use with AI agents
 
-`shotcraft mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io), so an agent such as Claude Code, Codex or Cursor can capture the screen, read text and hand captures back to you.
+`shotcraft4kept mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io), so an agent such as Claude Code, Codex or Cursor can capture the screen, read text and hand captures back to you.
 Register it with your agent:
 
 ```sh
-claude mcp add shotcraft -- shotcraft mcp
+claude mcp add shotcraft4kept -- shotcraft4kept mcp
 ```
 
 ```toml
 # ~/.codex/config.toml
 [mcp_servers.shotcraft]
-command = "shotcraft"
+command = "shotcraft4kept"
 args = ["mcp"]
 ```
 
 ```json
-{ "mcpServers": { "shotcraft": { "command": "shotcraft", "args": ["mcp"] } } }
+{ "mcpServers": { "shotcraft4kept": { "command": "shotcraft4kept", "args": ["mcp"] } } }
 ```
 
 The JSON form goes in `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor) or your agent's equivalent.
@@ -118,18 +124,18 @@ The JSON form goes in `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor) or 
 Every capture goes into your capture history, and the other tools refer to it by its history id.
 The image an agent sees is scaled down to 1568 pixels on its long edge; `area` coordinates are always full-resolution pixels, and the result's `path` is the full capture.
 An agent's capture shows no notification or Quick Access and leaves the clipboard alone unless the agent calls `copy_capture`.
-On macOS, grant Screen Recording permission to the app that runs the agent (Terminal, Cursor, Claude), not to ShotCraft.
+On macOS, grant Screen Recording permission to the app that runs the agent (Terminal, Cursor, Claude), not to ShotCraft4Kept.
 
 ## Install
 
-Download the package for your system from the [releases page](https://github.com/mmartinez/shotcraft/releases); `SHA256SUMS` lists each file's checksum.
+Download the package for your system from the [releases page](https://github.com/jamesbuckley-source/shotcraft4kept/releases); `SHA256SUMS` lists each file's checksum.
 The builds are not code-signed yet, so Windows and macOS ask you to confirm the first launch.
 
 | System | Packages | First launch |
 |---|---|---|
-| Linux x86_64 and aarch64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | `.deb`, `.rpm`, `.AppImage`, `.tar.gz` | The `.deb` and `.rpm` add ShotCraft to the app menu. Make the AppImage executable (`chmod +x`) and run it. The `.tar.gz` holds `bin/shotcraft` and its `share/` files. |
-| Windows 10 and 11, x64 and arm64 | `.msi` installer, `.zip` | When SmartScreen says "Windows protected your PC", choose More info, then Run anyway. The installer adds ShotCraft to the Start menu. |
-| macOS 11 or later, Apple silicon and Intel | `.dmg` | Drag ShotCraft to Applications and open it. When macOS says it cannot verify the app, open System Settings, Privacy & Security, and choose Open Anyway. |
+| Linux x86_64 and aarch64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | `.deb`, `.rpm`, `.AppImage`, `.tar.gz` | The `.deb` and `.rpm` add ShotCraft4Kept to the app menu. Make the AppImage executable (`chmod +x`) and run it. The `.tar.gz` holds `bin/shotcraft4kept` and its `share/` files. |
+| Windows 10 and 11, x64 and arm64 | `.msi` installer, `.zip` | When SmartScreen says "Windows protected your PC", choose More info, then Run anyway. The installer adds ShotCraft4Kept to the Start menu. |
+| macOS 11 or later, Apple silicon and Intel | `.dmg` | Drag ShotCraft4Kept to Applications and open it. When macOS says it cannot verify the app, open System Settings, Privacy & Security, and choose Open Anyway. |
 
 ## Building
 
@@ -139,7 +145,7 @@ Build from source with Rust 1.95 or newer (<https://rustup.rs>).
 cargo build --release
 ```
 
-The binary is `target/release/shotcraft` (`shotcraft.exe` on Windows).
+The binary is `target/release/shotcraft4kept` (`shotcraft4kept.exe` on Windows).
 Each platform also needs a C toolchain and, on Linux, some development packages:
 
 - Linux (Debian and Ubuntu package names): `build-essential pkg-config libclang-dev libxcb1-dev libgbm-dev libegl-dev libpipewire-0.3-dev libspa-0.2-dev`.
@@ -157,11 +163,11 @@ The launcher's right-click menu offers the capture modes directly.
 - macOS: grant Screen Recording permission on first capture.
   Auto-scroll in scrolling capture also needs Accessibility permission, because it moves the pointer and scrolls.
   The capture overlay raises its windows above the menu bar and Dock.
-- Wayland: ShotCraft's global shortcuts and window placement need X11.
+- Wayland: ShotCraft4Kept's global shortcuts and window placement need X11.
   On a Wayland session, bind your desktop's shortcuts to the subcommands instead.
   Only X11 (including XWayland, with `WAYLAND_DISPLAY` unset) has been tested.
 - Linux drag and drop out of Quick Access speaks XDND; it has been tested with X11 apps.
-- Copying on Linux needs a local X display with the X-Resource extension, which Xorg, XWayland and Xvfb provide: ShotCraft reports a copy only after confirming it owns the clipboard, so it refuses to copy over `ssh -X` or other network displays, where the X server cannot tell its clients apart.
+- Copying on Linux needs a local X display with the X-Resource extension, which Xorg, XWayland and Xvfb provide: ShotCraft4Kept reports a copy only after confirming it owns the clipboard, so it refuses to copy over `ssh -X` or other network displays, where the X server cannot tell its clients apart.
 - The OCR models (about 12 MB) download on first use into the folder shown in Settings, Advanced.
 
 ## Layout
@@ -170,13 +176,13 @@ The launcher's right-click menu offers the capture modes directly.
 crates/doc        document model, tiny-skia rendering, pixel effects, scrolling-capture stitching (no UI, no I/O layout)
 crates/engine     screen capture, settings and state, history, OCR, clipboard, save, upload, launching modes, agent operations
 crates/ui-egui    every window: overlay, editor, Quick Access, pin, scrolling capture, history, settings, toasts
-apps/shotcraft    the binary: CLI, tray daemon and MCP server
+apps/shotcraft4kept    the binary: CLI, tray daemon and MCP server
 assets/app-icon   the app icon (SVG master and generated theme PNGs)
 packaging         icon generation, the Linux desktop entry and installer, and the release packages for each platform
 ```
 
 See [`AGENTS.md`](AGENTS.md) for the rules the code follows and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute.
-Report bugs and request features in the [issue tracker](https://github.com/mmartinez/shotcraft/issues).
+Report bugs and request features in the [issue tracker](https://github.com/jamesbuckley-source/shotcraft4kept/issues).
 
 ## License
 

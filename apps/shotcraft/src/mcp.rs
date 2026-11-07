@@ -121,8 +121,8 @@ impl Server {
 }
 
 #[tool_handler(
-    name = "shotcraft",
-    instructions = "Captures land in ShotCraft history; pass the returned id to the other tools. Area coordinates are full-resolution pixels of the captured image. Nothing appears on the user's screen or clipboard unless you call copy_capture or show_capture."
+    name = "shotcraft4kept",
+    instructions = "Captures land in ShotCraft4Kept history; pass the returned id to the other tools. Area coordinates are full-resolution pixels of the captured image. Nothing appears on the user's screen or clipboard unless you call copy_capture or show_capture."
 )]
 impl ServerHandler for Server {}
 

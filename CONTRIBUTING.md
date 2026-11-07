@@ -1,4 +1,4 @@
-# Contributing to ShotCraft
+# Contributing to ShotCraft4Kept
 
 Bug reports, fixes and features are welcome.
 Report security problems privately as described in [`SECURITY.md`](SECURITY.md), not in a public issue.
@@ -76,4 +76,4 @@ Describe the problem, the fix, and how you verified it, with screenshots for UI 
 
 ## License
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in ShotCraft by you, as defined in the Apache-2.0 license, shall be dual licensed as MIT OR Apache-2.0, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in ShotCraft4Kept by you, as defined in the Apache-2.0 license, shall be dual licensed as MIT OR Apache-2.0, without any additional terms or conditions.

@@ -16,7 +16,7 @@ use crate::{Error, Result};
 pub const NOTIFY_BODY_ENV: &str = "SHOTCRAFT_NOTIFY_BODY";
 
 fn this_app() -> Command {
-    Command::new(std::env::current_exe().map(installed_path).unwrap_or_else(|_| PathBuf::from("shotcraft")))
+    Command::new(std::env::current_exe().map(installed_path).unwrap_or_else(|_| PathBuf::from("shotcraft4kept")))
 }
 
 /// Linux names a running binary that has since been replaced (an update, a rebuild) `<path> (deleted)`;

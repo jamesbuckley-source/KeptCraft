@@ -1,5 +1,5 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-//! ShotCraft: cross-platform screenshot tool.
+//! ShotCraft4Kept: screenshot tool for Kept, built on ShotCraft.
 //! Every capture mode is a subcommand, so any of them can be bound to an OS shortcut.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -20,7 +20,7 @@ use shotcraft_ui_egui::pin::{self, ImageSource};
 use shotcraft_ui_egui::{dialogs, editor, history_view, notify, quick, scrolling, settings_view};
 
 #[derive(Parser)]
-#[command(name = "shotcraft", version, about = "Capture, annotate, redact and share screenshots.")]
+#[command(name = "shotcraft4kept", version, about = "Capture, annotate, redact and share screenshots, with Kept.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -185,7 +185,7 @@ fn main() {
     let result =
         std::panic::catch_unwind(AssertUnwindSafe(|| dispatch(cmd))).unwrap_or_else(|panic| Err(anyhow!("internal error: {}", panic_message(&*panic))));
     if let Err(err) = result {
-        eprintln!("shotcraft: {err:#}");
+        eprintln!("shotcraft4kept: {err:#}");
         if toast_on_error {
             share::warn("Something went wrong", &format!("{err:#}"));
         }

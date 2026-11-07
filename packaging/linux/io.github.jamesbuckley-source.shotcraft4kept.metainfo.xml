@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata for software centres and Flathub. -->
 <component type="desktop-application">
-  <id>io.github.mmartinez.shotcraft</id>
+  <id>io.github.jamesbuckley-source.shotcraft4kept</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>ShotCraft</name>
+  <name>ShotCraft4Kept</name>
   <summary>Capture, annotate, redact and share screenshots</summary>
   <developer id="io.github.mmartinez">
-    <name>The ShotCraft contributors</name>
+    <name>The ShotCraft4Kept contributors</name>
   </developer>
   <description>
     <p>
-      ShotCraft captures an area, a window, the whole screen or a scrolling page,
+      ShotCraft4Kept captures an area, a window, the whole screen or a scrolling page,
       then lets you annotate, redact and share the result.
     </p>
     <ul>
@@ -23,10 +23,10 @@
       <li>Every capture mode is a command you can bind to a keyboard shortcut</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.mmartinez.shotcraft.desktop</launchable>
-  <icon type="stock">io.github.mmartinez.shotcraft</icon>
-  <url type="homepage">https://github.com/mmartinez/shotcraft</url>
-  <url type="bugtracker">https://github.com/mmartinez/shotcraft/issues</url>
+  <launchable type="desktop-id">io.github.jamesbuckley-source.shotcraft4kept.desktop</launchable>
+  <icon type="stock">io.github.jamesbuckley-source.shotcraft4kept</icon>
+  <url type="homepage">https://github.com/jamesbuckley-source/shotcraft4kept</url>
+  <url type="bugtracker">https://github.com/jamesbuckley-source/shotcraft4kept/issues</url>
   <categories>
     <category>Graphics</category>
   </categories>
@@ -48,7 +48,7 @@
     <control>pointing</control>
   </supports>
   <provides>
-    <binary>shotcraft</binary>
+    <binary>shotcraft4kept</binary>
   </provides>
   <content_rating type="oars-1.1"/>
 </component>

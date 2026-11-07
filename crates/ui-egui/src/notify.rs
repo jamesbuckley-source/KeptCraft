@@ -25,7 +25,7 @@ pub fn run(title: String, body: String, warning: bool) -> anyhow::Result<()> {
     let (slot, lock) = theme::claim_slot("toast")?;
     let screen = capture::primary_logical_rect();
     let pos = pos2(screen.right() - SIZE.x - 16.0, screen.top() + 40.0 + slot as f32 * (SIZE.y + 10.0));
-    let builder = theme::floating("ShotCraft notification", pos, SIZE).with_active(false);
+    let builder = theme::floating("ShotCraft4Kept notification", pos, SIZE).with_active(false);
     theme::run("shotcraft-notify", builder, move |_| Toast { title, body, warning, shown: Instant::now(), _slot: lock })
 }
 

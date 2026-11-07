@@ -7,11 +7,14 @@ use serde::{Deserialize, Serialize};
 use crate::Result;
 use crate::doc::model::Background;
 
-const APP_DIR: &str = "shotcraft";
+const APP_DIR: &str = "shotcraft4kept";
+/// The folder this fork used before it was renamed; a fresh install takes its settings from there once.
+const LEGACY_APP_DIR: &str = "shotcraft";
 
-/// `SHOTCRAFT_HOME` keeps settings and data in that one folder instead of the platform's (tests, sandboxes).
+/// `SHOTCRAFT4KEPT_HOME` keeps settings and data in that one folder instead of the platform's (tests,
+/// sandboxes); `SHOTCRAFT_HOME` stays because existing scripts and Kept's handoff pass it.
 fn home_override() -> Option<PathBuf> {
-    std::env::var_os("SHOTCRAFT_HOME").filter(|v| !v.is_empty()).map(PathBuf::from)
+    ["SHOTCRAFT4KEPT_HOME", "SHOTCRAFT_HOME"].iter().find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from))
 }
 
 pub fn config_dir() -> PathBuf {
@@ -224,7 +227,7 @@ impl Default for Settings {
     fn default() -> Self {
         // Captures get a folder of their own: a Kept user should not find them on the Desktop, and
         // Kept watches this folder for edits (it reads `save_dir` from settings.json).
-        let save_dir = dirs::picture_dir().or_else(dirs::desktop_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("ShotCraft");
+        let save_dir = dirs::picture_dir().or_else(dirs::desktop_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("ShotCraft4Kept");
         Self {
             save_dir,
             export_format: ExportFormat::Png,
@@ -262,7 +265,21 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load() -> Self {
-        read_json(&settings_path()).unwrap_or_default()
+        if let Some(settings) = read_json(&settings_path()) {
+            return settings;
+        }
+        // The fork was named ShotCraft until the rename: a fresh folder inherits those settings, so the
+        // save folder, palette and the Kept editor path survive it.
+        home_override()
+            .is_none()
+            .then(|| dirs::config_dir().map(|d| d.join(LEGACY_APP_DIR).join("settings.json")))
+            .flatten()
+            .and_then(|legacy| read_json(&legacy))
+            .map(|settings: Self| {
+                let _ = settings.save();
+                settings
+            })
+            .unwrap_or_default()
     }
 
     pub fn save(&self) -> Result<()> {
@@ -375,7 +392,7 @@ mod tests {
     fn defaults_suit_a_clip_manager() {
         let s = Settings::default();
         assert!(s.copy_after_capture, "a capture should reach Kept without a second action");
-        assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("ShotCraft"), "captures get their own folder, not the Desktop");
+        assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("ShotCraft4Kept"), "captures get their own folder, not the Desktop");
         assert!(s.quick_access_auto_close > 0, "the card should not linger once the clip is in Kept");
         // Kept binds Alt+V and Alt+Shift+V, and Windows switches keyboard layouts on Alt+Shift.
         let keys = s.hotkeys.entries().into_iter().map(|(_, key)| key).filter(|key| !key.is_empty());

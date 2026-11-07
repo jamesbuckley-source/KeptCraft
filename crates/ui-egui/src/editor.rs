@@ -177,8 +177,8 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
     let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
     let title = match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
-        Some(name) => format!("{} — Annotate", name.to_string_lossy()),
-        None => "Annotate".to_owned(),
+        Some(name) => format!("{} — ShotCraft4Kept", name.to_string_lossy()),
+        None => "ShotCraft4Kept — Annotate".to_owned(),
     };
     let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(760.0, 480.0)).with_drag_and_drop(true);
     let settings = Settings::load();

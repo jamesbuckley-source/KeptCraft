@@ -39,7 +39,7 @@ fn hosts_see_a_stable_contract() {
     .unwrap();
     image::RgbaImage::new(2, 1).save(dir.join("history").join(stored).join("capture.png")).unwrap();
     std::fs::write(dir.join("settings.json"), json!({"save_dir": dir}).to_string()).unwrap();
-    let mut server = Command::new(env!("CARGO_BIN_EXE_shotcraft"));
+    let mut server = Command::new(env!("CARGO_BIN_EXE_shotcraft4kept"));
     // No display: a window the server launches must fail, not open on the machine running the tests.
     server.arg("mcp").env("SHOTCRAFT_HOME", &dir).env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY");
     let mut child = server.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
@@ -50,7 +50,7 @@ fn hosts_see_a_stable_contract() {
 
     let init = json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "shotcraft-test", "version": "0"}});
     let server = request(&mut stdin, &lines, 1, "initialize", init)["serverInfo"].clone();
-    assert_eq!((server["name"].as_str(), server["version"].as_str()), (Some("shotcraft"), Some(env!("CARGO_PKG_VERSION"))));
+    assert_eq!((server["name"].as_str(), server["version"].as_str()), (Some("shotcraft4kept"), Some(env!("CARGO_PKG_VERSION"))));
     send(&mut stdin, json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     let tools = request(&mut stdin, &lines, 2, "tools/list", json!({}));

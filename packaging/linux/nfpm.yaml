@@ -1,7 +1,7 @@
 # .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). package.sh stages the file tree,
 # substitutes its path for ${STAGE} (nfpm does not expand variables in `src`) and sets VERSION
 # and PKG_ARCH.
-name: shotcraft
+name: shotcraft4kept
 arch: ${PKG_ARCH}
 platform: linux
 version: ${VERSION}
@@ -10,8 +10,8 @@ version_schema: semver
 release: 1
 section: graphics
 priority: optional
-maintainer: The ShotCraft contributors <2624124+mmartinez@users.noreply.github.com>
-homepage: https://github.com/mmartinez/shotcraft
+maintainer: The ShotCraft4Kept contributors <2624124+mmartinez@users.noreply.github.com>
+homepage: https://github.com/jamesbuckley-source/shotcraft4kept
 license: MIT OR Apache-2.0
 description: |-
   Capture, annotate, redact and share screenshots.
@@ -58,8 +58,8 @@ overrides:
       - xdg-desktop-portal
 
 contents:
-  - src: ${STAGE}/usr/bin/shotcraft
-    dst: /usr/bin/shotcraft
+  - src: ${STAGE}/usr/bin/shotcraft4kept
+    dst: /usr/bin/shotcraft4kept
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/

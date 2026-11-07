@@ -44,7 +44,7 @@ jobs:
           fi
           case "$VERSION" in *-*) pre=true ;; *) pre=false ;; esac
           { echo "version=$VERSION"; echo "prerelease=$pre"; } >> "$GITHUB_OUTPUT"
-          echo "### ShotCraft v$VERSION (\`${GITHUB_SHA::9}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ShotCraft4Kept v$VERSION (\`${GITHUB_SHA::9}\`)" >> "$GITHUB_STEP_SUMMARY"
 
   linux:
     name: Linux ${{ matrix.arch }}
@@ -95,7 +95,7 @@ jobs:
       - name: Install and run the deb on Ubuntu 22.04
         run: |
           docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD/dist/release:/dist:ro" ubuntu:22.04 \
-            sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends /dist/*.deb >/dev/null && shotcraft --version'
+            sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends /dist/*.deb >/dev/null && shotcraft4kept --version'
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -199,7 +199,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           tag="v$VERSION"
-          title="ShotCraft $VERSION"
+          title="ShotCraft4Kept $VERSION"
           if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [ "$draft" != "true" ]; then
               echo "::error::Release $tag is already published. Bump the version in Cargo.toml first."

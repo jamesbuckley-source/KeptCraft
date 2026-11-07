@@ -143,7 +143,7 @@ pub fn run(mode: Mode, preset: Option<Preset>) -> anyhow::Result<Option<Outcome>
         monitors,
     };
     let options =
-        eframe::NativeOptions { viewport: monitor_builder(&app.monitors[root], "ShotCraft capture"), renderer: eframe::Renderer::Glow, ..Default::default() };
+        eframe::NativeOptions { viewport: monitor_builder(&app.monitors[root], "ShotCraft4Kept capture"), renderer: eframe::Renderer::Glow, ..Default::default() };
     eframe::run_native(
         "shotcraft-overlay",
         options,
@@ -169,7 +169,7 @@ impl eframe::App for OverlayApp {
             if i == self.root {
                 continue;
             }
-            let builder = monitor_builder(&self.monitors[i], "ShotCraft capture");
+            let builder = monitor_builder(&self.monitors[i], "ShotCraft4Kept capture");
             ctx.show_viewport_immediate(ViewportId::from_hash_of(("monitor", i)), builder, |ui, _| self.monitor_ui(ui, i));
         }
         if self.finished {

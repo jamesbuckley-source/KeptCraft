@@ -1,13 +1,13 @@
 # AGENTS.md: guide for AI agents and contributors
 
-ShotCraft is a cross-platform screenshot tool written in Rust only.
+ShotCraft4Kept is a cross-platform screenshot tool written in Rust only.
 The UI is native egui/eframe (glow renderer).
 Never add Tauri, Electron or any webview or JavaScript UI layer.
 
 ## Fork: defaults shaped for Kept
 
 This fork is Kept's screenshot editor: captures are copied to the clipboard so Kept's history picks
-them up, they save into `Pictures/ShotCraft`, the Quick Access card closes itself, and every default
+them up, they save into `Pictures/ShotCraft4Kept`, the Quick Access card closes itself, and every default
 shortcut avoids Kept's `Alt+V`/`Alt+Shift+V` and the `Alt+Shift` layout switch.
 They live in `Settings::default()` and `config::tests::defaults_suit_a_clip_manager`; keep them when
 merging upstream.
@@ -20,14 +20,14 @@ crates/
   engine     L1 screen capture (xcap), settings and state, history, OCR (ocrs), clipboard, save, upload, launching modes, agent operations (ops)
   ui-egui    L2 every window: capture overlay, editor, Quick Access, pin, scrolling capture, history, settings, toasts
 apps/
-  shotcraft  L3 the binary: clap CLI (one subcommand per mode), the tray daemon and the MCP server (`shotcraft mcp`)
+  shotcraft4kept  L3 the binary: clap CLI (one subcommand per mode), the tray daemon and the MCP server (`shotcraft4kept mcp`)
 ```
 
 A crate depends only on lower layers.
 Nothing below `ui-egui` may use egui, eframe, winit or rfd; `doc` uses `emath` and `ecolor` for geometry and colour.
 File dialogs live in `ui-egui/src/dialogs.rs`.
 
-Each mode runs in its own process (`shotcraft <command>`): the daemon and the windows launch modes with `engine::share::spawn`, so a crash in one capture never takes down the tray.
+Each mode runs in its own process (`shotcraft4kept <command>`): the daemon and the windows launch modes with `engine::share::spawn`, so a crash in one capture never takes down the tray.
 
 ## Golden rules
 
@@ -66,8 +66,8 @@ Files the app downloads at runtime instead of bundling (the OCR models, CC BY-SA
 After changing dependencies, regenerate it with `cargo about generate --workspace --locked about.hbs -o THIRD-PARTY-LICENSES.md` (cargo-about 0.9.2); CI fails when it is stale or a crate's license is not in `about.toml`'s `accepted` list.
 Add a license to `accepted` only if it is permissive or, like MPL-2.0, file-level copyleft that applies to unmodified crates.
 
-The app icon's master is `assets/app-icon/shotcraft.svg`; after editing it, run `packaging/icons.sh` (needs resvg) and commit the PNGs it writes.
-The app id `io.github.mmartinez.shotcraft` (`theme::APP_ID`) names the window class, the desktop entry and the icons; change them together.
+The app icon's master is `assets/app-icon/shotcraft4kept.svg`; after editing it, run `packaging/icons.sh` (needs resvg) and commit the PNGs it writes.
+The app id `io.github.jamesbuckley-source.shotcraft4kept` (`theme::APP_ID`) names the window class, the desktop entry and the icons; change them together.
 
 ### Shared rendering
 
@@ -104,12 +104,12 @@ Give egui at least 50 ms between synthetic input events or it misses keys.
 
 ## Agents and the command registry
 
-`shotcraft mcp` (`apps/shotcraft/src/mcp.rs`) serves AI agents over the Model Context Protocol (rmcp, stdio).
+`shotcraft4kept mcp` (`apps/shotcraft/src/mcp.rs`) serves AI agents over the Model Context Protocol (rmcp, stdio).
 Each tool is a thin wrapper over one function in `engine::ops`: a typed request in (serde and schemars, so the request type is the tool's JSON Schema), a typed result out.
 Agent operations never toast, open windows or change the clipboard unless that is the operation's whole point.
 History ids from an agent arrive as `history::HistoryId`, which is checked when it is decoded.
 Tool names and parameter names are public API: hosts store them in configs and per-tool approvals, and `apps/shotcraft/tests/mcp.rs` fails when one changes.
-In `shotcraft mcp`, stdout carries only MCP messages; log to stderr.
+In `shotcraft4kept mcp`, stdout carries only MCP messages; log to stderr.
 
 The planned next step is a command registry in `engine` (stable id, label, shortcut, JSON params), dispatched by id from the UI, the CLI, a JSON control channel and the MCP server; the `ops` request types become its JSON params unchanged.
 New user-visible behaviour should be shaped so it can become such a command.

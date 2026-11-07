@@ -53,14 +53,14 @@ pub(crate) const MENU: [Option<(&str, &str)>; 18] = [
     Some(("Restore Recently Closed", "restore-recently-closed")),
     None,
     Some(("Settings…", "open-settings")),
-    Some(("Quit ShotCraft", "quit")),
+    Some(("Quit ShotCraft4Kept", "quit")),
 ];
 
 pub fn run() -> anyhow::Result<()> {
     std::fs::create_dir_all(run_dir())?;
     let lock = File::options().create(true).truncate(false).write(true).open(run_dir().join("daemon.lock"))?;
     if lock.try_lock().is_err() {
-        share::notify("ShotCraft is already running", "Use the tray icon or your shortcuts.");
+        share::notify("ShotCraft4Kept is already running", "Use the tray icon or your shortcuts.");
         return Ok(());
     }
     #[allow(unused_mut)]
@@ -112,7 +112,7 @@ impl Daemon {
                 eprintln!("tray menu: {e}");
             }
         }
-        let mut tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("ShotCraft");
+        let mut tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("ShotCraft4Kept");
         if let Some(icon) = theme::app_icon(64).and_then(|(rgba, size)| tray_icon::Icon::from_rgba(rgba, size, size).ok()) {
             tray = tray.with_icon(icon);
         }

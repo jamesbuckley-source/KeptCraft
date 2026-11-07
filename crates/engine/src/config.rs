@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::doc::model::Background;
+use crate::doc::model::{Background, OwnedGradient};
 
 const APP_DIR: &str = "shotcraft4kept";
 /// The folder this fork used before it was renamed; a fresh install takes its settings from there once.
@@ -227,6 +227,8 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     pub upload: UploadSettings,
     pub kept: KeptSettings,
+    /// Custom backgrounds built in the background tool, offered beside the built-in gradients.
+    pub gradients: Vec<OwnedGradient>,
     pub presets: Vec<Preset>,
     pub palette: Vec<[u8; 4]>,
 }
@@ -257,6 +259,7 @@ impl Default for Settings {
             hotkeys: Hotkeys::default(),
             upload: UploadSettings::default(),
             kept: KeptSettings::default(),
+            gradients: Vec::new(),
             presets: Vec::new(),
             palette: vec![
                 [255, 59, 48, 255],

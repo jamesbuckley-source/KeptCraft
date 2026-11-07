@@ -11,8 +11,8 @@ use tiny_skia::{
 
 use crate::effects::{self, IRect};
 use crate::model::{
-    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, RedactMode, Shape, TextStyle, arrow_head_len, curve_control, curve_point, highlighter_width,
-    text_padding,
+    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, arrow_head_len, curve_control, curve_point,
+    highlighter_width, text_padding,
 };
 use crate::{Error, Result, fonts};
 
@@ -450,6 +450,24 @@ fn gradient_paint(index: usize, w: f32, h: f32) -> Option<Paint<'static>> {
     Some(Paint { shader, anti_alias: true, ..Default::default() })
 }
 
+fn custom_paint(g: &OwnedGradient, w: f32, h: f32) -> Option<Paint<'static>> {
+    let (sin, cos) = g.angle.to_radians().sin_cos();
+    let half = (w * cos.abs() + h * sin.abs()) / 2.0;
+    let c = Point::from_xy(w / 2.0, h / 2.0);
+    let start = Point::from_xy(c.x - cos * half, c.y - sin * half);
+    let end = Point::from_xy(c.x + cos * half, c.y + sin * half);
+    let stops = g
+        .sorted_stops()
+        .iter()
+        .map(|s| {
+            let [r, gg, b, a] = s.color;
+            GradientStop::new(s.at.clamp(0.0, 1.0), tiny_skia::Color::from_rgba8(r, gg, b, a))
+        })
+        .collect();
+    let shader = LinearGradient::new(start, end, stops, SpreadMode::Pad, Transform::identity())?;
+    Some(Paint { shader, anti_alias: true, ..Default::default() })
+}
+
 /// Canvas size and content offset for a background, in output pixels.
 pub fn background_layout(content: Vec2, bg: &Background, s: f32) -> (Vec2, Vec2) {
     let pad = bg.padding * s;
@@ -486,6 +504,11 @@ fn compose_background(content: &Pixmap, bg: &Background, s: f32) -> Result<(Pixm
         BgFill::Transparent => {}
         BgFill::Gradient(i) => {
             if let (Some(p), Some(full)) = (gradient_paint(*i, w as f32, h as f32), full) {
+                canvas.fill_rect(full, &p, Transform::identity(), None);
+            }
+        }
+        BgFill::Custom(g) => {
+            if let (Some(p), Some(full)) = (custom_paint(g, w as f32, h as f32), full) {
                 canvas.fill_rect(full, &p, Transform::identity(), None);
             }
         }
@@ -661,6 +684,23 @@ mod tests {
         doc.items.push(Item { shape: Shape::Counter { center: pos2(15.0, 50.0), n: 1 }, color: Color32::RED, width: 4.0 });
         let with_item = render(&doc, &doc.base, &RenderOpts::default()).unwrap().region;
         assert!(with_item.contains(pos2(3.0, 50.0)), "counter stays visible: {with_item:?}");
+    }
+
+    #[test]
+    fn a_custom_gradient_fills_the_background_left_to_right() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(20, 20, image::Rgba([0, 0, 0, 255])));
+        let gradient = OwnedGradient {
+            angle: 0.0,
+            stops: vec![crate::model::GradientStop { at: 0.0, color: [255, 0, 0, 255] }, crate::model::GradientStop { at: 1.0, color: [0, 0, 255, 255] }],
+        };
+        doc.background =
+            Some(Background { fill: BgFill::Custom(Box::new(gradient)), padding: 20.0, radius: 0.0, shadow: 0.0, auto_balance: false, ..Default::default() });
+        let out = flatten(&doc).unwrap();
+        let left = out.get_pixel(1, 30).0;
+        let right = out.get_pixel(58, 30).0;
+        assert!(left[0] > 200 && left[2] < 60, "left edge is red: {left:?}");
+        assert!(right[2] > 200 && right[0] < 60, "right edge is blue: {right:?}");
+        assert_eq!(out.get_pixel(30, 30).0, [0, 0, 0, 255], "the screenshot keeps its own pixels");
     }
 
     #[test]

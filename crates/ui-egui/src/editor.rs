@@ -19,7 +19,8 @@ use image::RgbaImage;
 use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
-    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, Orient, PROJECT_EXT, RedactMode, Shape, TextStyle, constrain_aspect,
+    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle,
+    constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -134,6 +135,8 @@ struct Editor {
     save_target: Option<PathBuf>,
     /// Files the File menu offers under Recent Files, most recent last.
     recent: Vec<PathBuf>,
+    /// The gradient being built in the background panel's popup, while it is open.
+    gradient_draft: Option<OwnedGradient>,
     settings: Settings,
     tool: Tool,
     color: Color32,
@@ -196,6 +199,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         project_path,
         save_target,
         recent,
+        gradient_draft: None,
         settings,
         tool: Tool::Arrow,
         color,
@@ -875,6 +879,67 @@ impl Editor {
         });
     }
 
+    /// The popup behind the + tile in the plain-colour row: build a gradient from any number of
+    /// stops, preview it, then keep it beside the built-in gradients.
+    fn gradient_popup(&mut self, ui: &mut egui::Ui, anchor: &egui::Response) {
+        let popup_id = ui.id().with("gradient-editor");
+        egui::Popup::from_toggle_button_response(anchor).id(popup_id).show(|ui| {
+            ui.set_min_width(300.0);
+            ui.label(RichText::new("Custom gradient").strong());
+            let mut draft = self.gradient_draft.take().unwrap_or_else(|| OwnedGradient {
+                angle: 135.0,
+                stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
+            });
+            let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+            paint_stops(ui.painter(), preview, draft.angle, |t| swatch_color(draft.color_at(t)));
+            ui.add_space(4.0);
+            let mut remove = None;
+            for i in 0..draft.stops.len() {
+                ui.horizontal(|ui| {
+                    let mut colour = swatch_color(draft.stops[i].color);
+                    if ui.color_edit_button_srgba(&mut colour).changed() {
+                        draft.stops[i].color = colour.to_array();
+                    }
+                    let mut percent = draft.stops[i].at * 100.0;
+                    if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).suffix("%").speed(1.0)).changed() {
+                        draft.stops[i].at = percent / 100.0;
+                    }
+                    if draft.stops.len() > 2 && ui.small_button(icon::X).on_hover_text("Remove this colour").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                draft.stops.remove(i);
+            }
+            let last = draft.sorted_stops().last().copied().unwrap_or(GradientStop { at: 1.0, color: [255, 255, 255, 255] });
+            if ui.small_button(format!("{}  Add colour", icon::PLUS)).clicked() {
+                draft.stops.push(GradientStop { at: 1.0, color: last.color });
+            }
+            ui.horizontal(|ui| {
+                ui.label("Angle");
+                ui.add(egui::DragValue::new(&mut draft.angle).range(0.0..=360.0).suffix("°").speed(1.0));
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Add to gradients").clicked() {
+                    let gradient = draft.clone();
+                    if let Ok(settings) = Settings::update(|s| s.gradients.push(gradient.clone())) {
+                        self.settings = settings;
+                    }
+                    self.set_fill(BgFill::Custom(Box::new(gradient)));
+                    self.gradient_draft = None;
+                    ui.close();
+                } else if ui.button("Cancel").clicked() {
+                    self.gradient_draft = None;
+                    ui.close();
+                } else {
+                    self.gradient_draft = Some(draft);
+                }
+            });
+        });
+    }
+
     fn style_controls(&mut self, ui: &mut egui::Ui) {
         // Colour swatch with palette popover.
         let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
@@ -1073,21 +1138,65 @@ impl Editor {
         let fill = self.doc.background.as_ref().map(|b| b.fill.clone());
         ui.add_space(4.0);
         ui.label(RichText::new("Gradients").strong());
+        let mut remove_gradient = None;
+        let mut chosen: Option<BgFill> = None;
         egui::Grid::new("gradients").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+            let mut tiles = 0;
             for (i, g) in GRADIENTS.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
-                paint_gradient(ui.painter(), r, i);
+                paint_stops(ui.painter(), r, g.angle, |t| sampled(g.stops, t));
                 if fill == Some(BgFill::Gradient(i)) {
                     ui.painter().rect_stroke(r.expand(2.0), 10, Stroke::new(2.5, theme::ACCENT), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(g.name).clicked() {
-                    self.set_fill(BgFill::Gradient(i));
+                    chosen = Some(BgFill::Gradient(i));
                 }
-                if i % 4 == 3 {
+                tiles += 1;
+                if tiles % 4 == 0 {
+                    ui.end_row();
+                }
+            }
+            // The user's own gradients follow the built-in ones, each with an x to delete it.
+            for (i, g) in self.settings.gradients.iter().enumerate() {
+                let (r, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
+                paint_stops(ui.painter(), r, g.angle, |t| swatch_color(g.color_at(t)));
+                if fill == Some(BgFill::Custom(Box::new(g.clone()))) {
+                    ui.painter().rect_stroke(r.expand(2.0), 10, Stroke::new(2.5, theme::ACCENT), StrokeKind::Outside);
+                }
+                let badge = Rect::from_center_size(r.right_top() + vec2(-2.0, 2.0), Vec2::splat(16.0));
+                let del = ui.interact(badge, ui.id().with(("delete-gradient", i)), Sense::click());
+                ui.painter().circle_filled(badge.center(), 8.0, Color32::from_black_alpha(170));
+                ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(10.0), Color32::WHITE);
+                let resp = resp.on_hover_text("Your gradient");
+                if del.on_hover_text("Delete this gradient").clicked() {
+                    remove_gradient = Some(i);
+                } else if resp.clicked() {
+                    chosen = Some(BgFill::Custom(Box::new(g.clone())));
+                }
+                tiles += 1;
+                if tiles % 4 == 0 {
                     ui.end_row();
                 }
             }
         });
+        if let Some(i) = remove_gradient {
+            let had_it =
+                self.doc.background.as_ref().is_some_and(|b| matches!(&b.fill, BgFill::Custom(g) if Some(g.as_ref()) == self.settings.gradients.get(i)));
+            if let Ok(settings) = Settings::update(|s| {
+                if i < s.gradients.len() {
+                    s.gradients.remove(i);
+                }
+            }) {
+                self.settings = settings;
+            }
+            if had_it {
+                self.set_fill(BgFill::Gradient(3));
+            }
+            self.flash("Gradient removed");
+        }
+        if let Some(fill) = chosen {
+            self.set_fill(fill);
+        }
         ui.add_space(6.0);
         ui.label(RichText::new("Plain color").strong());
         ui.horizontal_wrapped(|ui| {
@@ -1109,13 +1218,11 @@ impl Editor {
                     self.set_fill(BgFill::Solid(col));
                 }
             }
-            let mut custom = match &fill {
-                Some(BgFill::Solid(c)) => *c,
-                _ => Color32::WHITE,
-            };
-            if ui.color_edit_button_srgba(&mut custom).changed() {
-                self.set_fill(BgFill::Solid(custom));
-            }
+            // Build a gradient of your own; the tiles above and below it are the built-in ones.
+            let (r, plus) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            ui.painter().rect_stroke(r, 6, Stroke::new(1.5, ui.visuals().widgets.inactive.fg_stroke.color), StrokeKind::Inside);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(14.0), ui.visuals().widgets.inactive.fg_stroke.color);
+            self.gradient_popup(ui, &plus);
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -1671,24 +1778,38 @@ fn smooth(pts: &[Pos2]) -> Vec<Pos2> {
     cur
 }
 
-fn paint_gradient(painter: &egui::Painter, r: Rect, index: usize) {
-    let Some(g) = GRADIENTS.get(index) else { return };
-    let c = |i: usize| {
-        let [r, gg, b] = g.stops[i.min(g.stops.len() - 1)];
-        Color32::from_rgb(r, gg, b)
+/// A gradient tile: the four corners take the colour the gradient has at their own position, which
+/// is exact for the two-stop presets and close enough for a 44 px tile anywhere else.
+fn paint_stops(painter: &egui::Painter, r: Rect, angle: f32, sample: impl Fn(f32) -> Color32) {
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let half = (r.width() * cos.abs() + r.height() * sin.abs()) / 2.0;
+    let t_at = |p: egui::Pos2| {
+        let d = p - r.center();
+        (0.5 + (d.x * cos + d.y * sin) / (2.0 * half.max(1.0))).clamp(0.0, 1.0)
     };
-    let first = c(0);
-    let last = c(g.stops.len() - 1);
-    let mid = if g.stops.len() > 2 { c(1) } else { first.lerp_to_gamma(last, 0.5) };
     let mut mesh = Mesh::default();
-    // Diagonal gradient: top-left = first stop, bottom-right = last.
-    for (p, col) in [(r.left_top(), first), (r.right_top(), mid), (r.right_bottom(), last), (r.left_bottom(), mid)] {
-        mesh.colored_vertex(p, col);
+    for p in [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()] {
+        mesh.colored_vertex(p, sample(t_at(p)));
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     painter.add(EShape::mesh(mesh));
     painter.rect_stroke(r, 10, Stroke::new(1.0, Color32::from_black_alpha(25)), StrokeKind::Inside);
+}
+
+/// The colour at `t` of a built-in gradient, whose stops are evenly spaced.
+fn sampled(stops: &[[u8; 3]], t: f32) -> Color32 {
+    let Some(first) = stops.first() else { return Color32::BLACK };
+    if stops.len() == 1 {
+        let [r, g, b] = *first;
+        return Color32::from_rgb(r, g, b);
+    }
+    let x = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+    let i = (x.floor() as usize).min(stops.len() - 2);
+    let k = x - i as f32;
+    let (a, b) = (stops[i], stops[i + 1]);
+    let mix = |c: usize| (a[c] as f32 + (b[c] as f32 - a[c] as f32) * k).round() as u8;
+    Color32::from_rgb(mix(0), mix(1), mix(2))
 }
 
 impl eframe::App for Editor {

@@ -343,10 +343,70 @@ impl Aspect {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    /// Position along the gradient, 0..=1.
+    pub at: f32,
+    pub color: [u8; 4],
+}
+
+/// A gradient the user built: real stops, so it can live in a document and in a preset.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OwnedGradient {
+    /// Degrees, 0 = left to right, 90 = top to bottom.
+    pub angle: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+impl OwnedGradient {
+    /// The colour at `t` (0..=1) along the gradient, interpolated between the stops.
+    pub fn color_at(&self, t: f32) -> [u8; 4] {
+        let mut stops = self.stops.clone();
+        if stops.is_empty() {
+            return [0, 0, 0, 255];
+        }
+        stops.sort_by(|a, b| a.at.total_cmp(&b.at));
+        let t = t.clamp(0.0, 1.0);
+        let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return [0, 0, 0, 255] };
+        if t <= first.at {
+            return first.color;
+        }
+        if t >= last.at {
+            return last.color;
+        }
+        for pair in stops.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if t <= b.at {
+                let span = (b.at - a.at).max(f32::EPSILON);
+                let k = (t - a.at) / span;
+                let mix = |i: usize| (a.color[i] as f32 + (b.color[i] as f32 - a.color[i] as f32) * k).round() as u8;
+                return [mix(0), mix(1), mix(2), mix(3)];
+            }
+        }
+        last.color
+    }
+
+    /// Usable stops, sorted: a gradient needs at least two, so a one-stop draft repeats its colour.
+    pub fn sorted_stops(&self) -> Vec<GradientStop> {
+        let mut stops = self.stops.clone();
+        stops.sort_by(|a, b| a.at.total_cmp(&b.at));
+        if stops.is_empty() {
+            stops.push(GradientStop { at: 0.0, color: [255, 255, 255, 255] });
+        }
+        if stops.len() == 1 {
+            let only = stops[0];
+            stops.push(only);
+        }
+        stops
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum BgFill {
     Transparent,
     Gradient(usize),
+    /// A gradient the user built; the stops travel with the document.
+    Custom(Box<OwnedGradient>),
     Solid(Color32),
     Image(#[serde(with = "png_b64")] Arc<RgbaImage>),
     /// The screenshot itself, scaled to cover and heavily blurred.
@@ -563,6 +623,22 @@ mod tests {
         doc.crop = Some(Rect::from_min_max(pos2(2.0, 1.0), pos2(30.0, 18.0)));
         doc.background = Some(Background { fill: BgFill::Image(Arc::new(RgbaImage::new(3, 3))), ..Default::default() });
         doc
+    }
+
+    #[test]
+    fn custom_gradients_interpolate_their_stops() {
+        let g =
+            OwnedGradient { angle: 90.0, stops: vec![GradientStop { at: 0.0, color: [0, 0, 0, 255] }, GradientStop { at: 1.0, color: [255, 255, 255, 255] }] };
+        assert_eq!(g.color_at(0.0), [0, 0, 0, 255]);
+        assert_eq!(g.color_at(1.0), [255, 255, 255, 255]);
+        assert_eq!(g.color_at(0.5), [128, 128, 128, 255]);
+        // Stops given out of order still read left to right, and a single stop repeats itself.
+        let unsorted =
+            OwnedGradient { angle: 0.0, stops: vec![GradientStop { at: 1.0, color: [0, 0, 255, 255] }, GradientStop { at: 0.0, color: [255, 0, 0, 255] }] };
+        assert_eq!(unsorted.color_at(0.2), [204, 0, 51, 255]);
+        let single = OwnedGradient { angle: 0.0, stops: vec![GradientStop { at: 0.0, color: [1, 2, 3, 255] }] };
+        assert_eq!(single.sorted_stops().len(), 2);
+        assert_eq!(single.color_at(0.7), [1, 2, 3, 255]);
     }
 
     #[test]

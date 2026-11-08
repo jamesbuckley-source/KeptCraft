@@ -167,14 +167,20 @@ sends no information about the machine.
 
 ## Install
 
-Download the package for your system from the [releases page](https://github.com/jamesbuckley-source/KeptCraft/releases); `SHA256SUMS` lists each file's checksum.
+Download straight from the latest release, or from the [releases page](https://github.com/jamesbuckley-source/KeptCraft/releases) for older ones.
+[`SHA256SUMS`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/SHA256SUMS) lists every file's checksum.
 The builds are not code-signed yet, so Windows and macOS ask you to confirm the first launch.
+<!-- The links below point at the tag they ship with: bump the tag when a release is cut. -->
 
-| System | Packages | First launch |
+| System | Download | First launch |
 |---|---|---|
-| Linux x86_64 and aarch64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | `.deb`, `.rpm`, `.AppImage`, `.tar.gz` | The `.deb` and `.rpm` add KeptCraft to the app menu. Make the AppImage executable (`chmod +x`) and run it. The `.tar.gz` holds `bin/keptcraft` and its `share/` files. |
-| Windows 10 and 11, x64 and arm64 | `.msi` installer, `.zip` | When SmartScreen says "Windows protected your PC", choose More info, then Run anyway. The installer adds KeptCraft to the Start menu. |
-| macOS 11 or later, Apple silicon and Intel | `.dmg` | Drag KeptCraft to Applications and open it. When macOS says it cannot verify the app, open System Settings, Privacy & Security, and choose Open Anyway. |
+| Windows 10 and 11, x64 | [`.msi`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-windows-x64.msi) · [`.zip`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-windows-x64.zip) | The `.msi` installs for all users and adds KeptCraft to the Start menu; it takes the same path as the updater's own install. When SmartScreen says "Windows protected your PC", choose More info, then Run anyway. The `.zip` is just `keptcraft.exe` and the license files. |
+| Windows 10 and 11, arm64 | [`.msi`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-windows-arm64.msi) · [`.zip`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-windows-arm64.zip) | For Windows on ARM (Snapdragon machines). Same first-launch prompt as x64. |
+| macOS 11 or later, Apple silicon and Intel | [`.dmg`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-macos-universal.dmg) | Drag KeptCraft to Applications and open it. When macOS says it cannot verify the app, open System Settings, Privacy & Security, and choose Open Anyway. |
+| Linux x86_64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | [`.deb`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-x86_64.deb) · [`.rpm`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-x86_64.rpm) · [`.AppImage`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-x86_64.AppImage) · [`.tar.gz`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-x86_64.tar.gz) | The `.deb` and `.rpm` add KeptCraft to the app menu. Make the AppImage executable (`chmod +x`) and run it. The `.tar.gz` holds `bin/keptcraft` and its `share/` files. |
+| Linux aarch64 | [`.deb`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-aarch64.deb) · [`.rpm`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-aarch64.rpm) · [`.AppImage`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-aarch64.AppImage) · [`.tar.gz`](https://github.com/jamesbuckley-source/KeptCraft/releases/download/v0.3.0-beta.1/keptcraft-0.3.0-beta.1-linux-aarch64.tar.gz) | For ARM servers and Raspberry Pi-class machines running a 64-bit distro. |
+
+KeptCraft updates itself once a day from those same releases; see [Updates](#updates).
 
 ## Building
 

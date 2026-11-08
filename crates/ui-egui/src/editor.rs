@@ -1011,7 +1011,8 @@ impl Editor {
             }
             let counters = self.doc.items.iter().filter(|it| matches!(it.shape, Shape::Counter { .. })).count();
             for (tool, ic, tip, _) in TOOLS {
-                if tool == Tool::Counter {
+                // A rule before the pixelate/blur pair and around the counter keeps the groups apart.
+                if matches!(tool, Tool::Redact | Tool::Counter) {
                     ui.separator();
                 }
                 if theme::tool_button_icon(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
@@ -1094,6 +1095,8 @@ impl Editor {
                 if ui.available_width() > 132.0 {
                     ui.separator();
                     self.zoom_control(ui);
+                    // A rule on the tools side too, so the cluster reads as its own group.
+                    ui.separator();
                 }
             });
         });

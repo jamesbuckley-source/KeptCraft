@@ -9,8 +9,8 @@ use egui::{Color32, Key, Rect, Sense, Stroke, StrokeKind, TextureHandle, Texture
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::{ExportFormat, QuickAccessSide, Settings, State};
-use shotcraft_engine::{capture, history, ocr, share};
+use keptcraft_engine::config::{ExportFormat, QuickAccessSide, Settings, State};
+use keptcraft_engine::{capture, history, ocr, share};
 
 use crate::{dialogs, dragout, theme};
 
@@ -43,8 +43,8 @@ pub fn run(id: String) -> anyhow::Result<()> {
         QuickAccessSide::Right => screen.right() - 20.0 - card.x,
     };
     let y = screen.bottom() - 70.0 - (card.y + GAP) * (slot as f32 + 1.0);
-    let builder = theme::floating("ShotCraft4Kept quick access", egui::pos2(x, y.max(screen.top())), card).with_active(false);
-    theme::run("shotcraft-quick", builder, move |_| QuickAccess {
+    let builder = theme::floating("KeptCraft quick access", egui::pos2(x, y.max(screen.top())), card).with_active(false);
+    theme::run("keptcraft-quick", builder, move |_| QuickAccess {
         id,
         settings,
         image,

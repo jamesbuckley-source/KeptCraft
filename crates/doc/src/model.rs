@@ -11,9 +11,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result, fonts};
 
-pub const PROJECT_EXT: &str = "shotcraft";
-const PROJECT_FORMAT: &str = "shotcraft-project";
+pub const PROJECT_EXT: &str = "keptcraft";
+/// The extension the project file had before the rename; those files still open, so projects saved
+/// by an older copy are not lost.
+pub const LEGACY_PROJECT_EXT: &str = "shotcraft";
+const PROJECT_FORMAT: &str = "keptcraft-project";
 const PROJECT_VERSION: u32 = 1;
+
+/// Whether `path` names a project file, by either extension.
+pub fn is_project_path(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT) || e.eq_ignore_ascii_case(LEGACY_PROJECT_EXT))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArrowStyle {
@@ -1102,7 +1110,7 @@ impl Doc {
 
     /// Open a project file or any supported image.
     pub fn open(path: &Path) -> Result<Self> {
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)) {
+        if is_project_path(path) {
             return Self::load_project(path);
         }
         Ok(Self::new(image::open(path)?.into_rgba8()))
@@ -1224,7 +1232,7 @@ mod tests {
     #[test]
     fn project_round_trips_through_disk() {
         let doc = sample_doc();
-        let path = std::env::temp_dir().join(format!("shotcraft-test-{}.shotcraft", std::process::id()));
+        let path = std::env::temp_dir().join(format!("keptcraft-test-{}.keptcraft", std::process::id()));
         doc.save_project(&path).unwrap();
         let loaded = Doc::load_project(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -1233,7 +1241,7 @@ mod tests {
 
     #[test]
     fn rejects_foreign_json() {
-        let path = std::env::temp_dir().join(format!("shotcraft-foreign-{}.shotcraft", std::process::id()));
+        let path = std::env::temp_dir().join(format!("keptcraft-foreign-{}.keptcraft", std::process::id()));
         std::fs::write(&path, br#"{"format":"other","version":1}"#).unwrap();
         assert!(Doc::load_project(&path).is_err());
         std::fs::remove_file(&path).ok();

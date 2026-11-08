@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, FontFamily, FontId, RichText, Sense, pos2, vec2};
 
-use shotcraft_engine::capture;
-use shotcraft_engine::doc::fonts;
+use keptcraft_engine::capture;
+use keptcraft_engine::doc::fonts;
 
 use crate::theme;
 
@@ -25,8 +25,8 @@ pub fn run(title: String, body: String, warning: bool) -> anyhow::Result<()> {
     let (slot, lock) = theme::claim_slot("toast")?;
     let screen = capture::primary_logical_rect();
     let pos = pos2(screen.right() - SIZE.x - 16.0, screen.top() + 40.0 + slot as f32 * (SIZE.y + 10.0));
-    let builder = theme::floating("ShotCraft4Kept notification", pos, SIZE).with_active(false);
-    theme::run("shotcraft-notify", builder, move |_| Toast { title, body, warning, shown: Instant::now(), _slot: lock })
+    let builder = theme::floating("KeptCraft notification", pos, SIZE).with_active(false);
+    theme::run("keptcraft-notify", builder, move |_| Toast { title, body, warning, shown: Instant::now(), _slot: lock })
 }
 
 impl eframe::App for Toast {

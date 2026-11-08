@@ -14,9 +14,9 @@ use egui::{Color32, Key, Rect, RichText, TextureHandle, TextureOptions, Viewport
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::capture::{self, MonitorShot};
-use shotcraft_engine::doc::effects::IRect;
-use shotcraft_engine::doc::stitch::{Push, Stitcher};
+use keptcraft_engine::capture::{self, MonitorShot};
+use keptcraft_engine::doc::effects::IRect;
+use keptcraft_engine::doc::stitch::{Push, Stitcher};
 
 use crate::theme;
 
@@ -96,7 +96,7 @@ pub fn run(monitor_id: Option<u32>, display: Option<usize>, rect: IRect, start: 
         .with_window_level(WindowLevel::AlwaysOnTop)
         .with_position(pos)
         .with_inner_size(PANEL);
-    theme::run("shotcraft-scrolling", builder, move |ctx| {
+    theme::run("keptcraft-scrolling", builder, move |ctx| {
         ctx.options_mut(|o| o.theme_preference = egui::ThemePreference::Dark);
         session
     })?;
@@ -299,7 +299,7 @@ pub fn countdown(monitor_id: u32, rect: IRect, seconds: u32) -> anyhow::Result<b
     let pos = beside(shot.logical_rect(), region_logical(&shot, rect), size);
     let fired = Rc::new(RefCell::new(false));
     let app = Countdown { until: Instant::now() + Duration::from_secs(seconds.max(1) as u64), seconds: seconds.max(1), fired: fired.clone() };
-    theme::run("shotcraft-timer", theme::floating("Self-Timer", pos, size), move |_| app)?;
+    theme::run("keptcraft-timer", theme::floating("Self-Timer", pos, size), move |_| app)?;
     Ok(*fired.borrow())
 }
 

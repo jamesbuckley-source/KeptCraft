@@ -17,16 +17,16 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::{ExportFormat, PRESET_EXT, Preset, Settings, State, default_palette};
-use shotcraft_engine::doc::fonts;
-use shotcraft_engine::doc::model::{
+use keptcraft_engine::config::{ExportFormat, LEGACY_PRESET_EXT, PRESET_EXT, Preset, Settings, State, default_palette};
+use keptcraft_engine::doc::fonts;
+use keptcraft_engine::doc::model::{
     Anchor, ArrowStyle, Aspect, Background, BgFill, CommentEntry, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item,
-    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextSpan, TextStyle, Watermark, constrain_aspect,
+    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextSpan, TextStyle, Watermark, constrain_aspect, is_project_path,
 };
-use shotcraft_engine::doc::render::{self, RenderOpts};
-use shotcraft_engine::{capture, history, ocr, share};
+use keptcraft_engine::doc::render::{self, RenderOpts};
+use keptcraft_engine::{capture, history, ocr, share, update};
 
-use crate::{dialogs, theme};
+use crate::{dialogs, theme, update_ui};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tool {
@@ -304,6 +304,12 @@ struct Editor {
     background_collapsed: bool,
     /// A panel size changed during a drag and still needs writing to the state file.
     panels_dirty: bool,
+    /// The daily GitHub check, its download and its installer.
+    update: update_ui::Updater,
+    /// The update offer was dismissed with "Later", so it stays closed until the next launch.
+    update_dismissed: bool,
+    /// The installer is running and this window already asked to close.
+    closing_for_update: bool,
 }
 
 /// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
@@ -323,14 +329,14 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
     let natural = if home { vec2(1240.0, 860.0) } else { vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0) };
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
     let size = natural.max(vec2(1300.0, 740.0)).min(screen.size() * 0.88);
-    let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
+    let project_path = path.as_ref().filter(|p| is_project_path(p)).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
     let title = if home {
-        "ShotCraft4Kept".to_owned()
+        "KeptCraft".to_owned()
     } else {
         match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
-            Some(name) => format!("{} — ShotCraft4Kept", name.to_string_lossy()),
-            None => "ShotCraft4Kept — Annotate".to_owned(),
+            Some(name) => format!("{} — KeptCraft", name.to_string_lossy()),
+            None => "KeptCraft — Annotate".to_owned(),
         }
     };
     let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(1040.0, 520.0)).with_drag_and_drop(true);
@@ -347,7 +353,7 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
     if let Some(path) = path.as_ref() {
         remember_recent(&mut recent, path);
     }
-    theme::run("shotcraft-editor", builder, move |_| Editor {
+    theme::run("keptcraft-editor", builder, move |_| Editor {
         doc,
         history_id,
         project_path,
@@ -411,11 +417,22 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
         background_width,
         background_collapsed,
         panels_dirty: false,
+        update: update_ui::Updater::new(),
+        update_dismissed: false,
+        closing_for_update: false,
     })
 }
 
 fn swatch_color(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+}
+
+/// The start of `text`, so a long release note cannot make the window taller than the screen.
+fn truncate(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
 }
 
 /// The tile size for the room the start screen has: three across, as wide as they can be.
@@ -528,7 +545,7 @@ impl Editor {
         r.map_err(|e| self.flash(format!("{e:#}"))).ok()
     }
 
-    fn export_image(&self) -> shotcraft_engine::Result<RgbaImage> {
+    fn export_image(&self) -> keptcraft_engine::Result<RgbaImage> {
         Ok(render::resize_percent(&render::flatten(&self.doc)?, self.export_percent))
     }
 
@@ -631,7 +648,7 @@ impl Editor {
                 let image = self.report(share::clipboard_image());
                 if let Some(image) = image {
                     self.load_document(Doc::new(image), None);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Title("ShotCraft4Kept — Annotate".to_owned()));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Title("KeptCraft — Annotate".to_owned()));
                 }
             }
             self.kept_menu(ui, &ctx);
@@ -671,8 +688,8 @@ impl Editor {
         if !self.settings.kept.enabled {
             return;
         }
-        let Some(kept) = shotcraft_engine::kept::detect() else { return };
-        let clips = match shotcraft_engine::kept::recent_images(&kept, 20) {
+        let Some(kept) = keptcraft_engine::kept::detect() else { return };
+        let clips = match keptcraft_engine::kept::recent_images(&kept, 20) {
             Ok(clips) => clips,
             Err(err) => {
                 ui.label(RichText::new("Kept's database is busy").size(12.0)).on_hover_text(format!("{err:#}"));
@@ -689,7 +706,7 @@ impl Editor {
                     match image::open(&clip.path) {
                         Ok(image) => {
                             self.load_document(Doc::new(image.into_rgba8()), None);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Title("Kept clip — ShotCraft4Kept".to_owned()));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Title("Kept clip — KeptCraft".to_owned()));
                         }
                         Err(err) => self.flash(format!("Could not open the Kept clip: {err}")),
                     }
@@ -703,7 +720,7 @@ impl Editor {
             Ok(doc) => {
                 let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_string());
                 self.load_document(doc, Some(path));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — ShotCraft4Kept")));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — KeptCraft")));
             }
             Err(err) => self.flash(format!("Could not open {}: {err}", path.display())),
         }
@@ -717,7 +734,7 @@ impl Editor {
         self.doc = doc;
         self.home = false;
         self.show_background = self.doc.background.is_some();
-        self.project_path = path.filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)));
+        self.project_path = path.filter(|p| is_project_path(p));
         self.history_id = None;
         self.save_target = None;
         self.undo.clear();
@@ -738,14 +755,14 @@ impl Editor {
     fn save_project_as(&mut self) {
         let name = format!("{}.{PROJECT_EXT}", share::default_file_name(ExportFormat::Png).trim_end_matches(".png"));
         let Some(chosen) =
-            rfd::FileDialog::new().set_directory(&self.settings.save_dir).set_file_name(name).add_filter("ShotCraft project", &[PROJECT_EXT]).save_file()
+            rfd::FileDialog::new().set_directory(&self.settings.save_dir).set_file_name(name).add_filter("KeptCraft project", &[PROJECT_EXT]).save_file()
         else {
             return;
         };
-        let path = if chosen.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)) {
+        let path = if is_project_path(&chosen) {
             chosen
         } else {
-            // Append rather than replace: "Shot 18.25.31" must not become "Shot 18.25.shotcraft".
+            // Append rather than replace: "Shot 18.25.31" must not become "Shot 18.25.keptcraft".
             let mut name = chosen.into_os_string();
             name.push(".");
             name.push(PROJECT_EXT);
@@ -1578,6 +1595,91 @@ impl Editor {
         }
     }
 
+    /// The offer to install a newer version: what the release says, and the three answers to it.
+    fn update_dialog(&mut self, ctx: &egui::Context) {
+        let release = match self.update.stage() {
+            // "Later" closes the offer for this launch only.
+            update_ui::Stage::Available(release) if !self.update_dismissed => release.as_ref().clone(),
+            update_ui::Stage::Downloading(name) => {
+                egui::Modal::new(egui::Id::new("update-downloading")).show(ctx, |ui| {
+                    ui.set_width(340.0);
+                    ui.heading("Downloading the update");
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Fetching {name}…"));
+                    });
+                    ui.label("KeptCraft closes itself when the installer starts.");
+                });
+                return;
+            }
+            update_ui::Stage::Started => {
+                egui::Modal::new(egui::Id::new("update-started")).show(ctx, |ui| {
+                    ui.set_width(340.0);
+                    ui.heading("Installing");
+                    ui.label("The installer is running. KeptCraft will close so it can be replaced.");
+                });
+                return;
+            }
+            _ => return,
+        };
+
+        let mut install = false;
+        let mut later = false;
+        let mut skip = false;
+        let mut page = false;
+        egui::Modal::new(egui::Id::new("update-available")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.heading(format!("KeptCraft {} is available", release.version_label()));
+            ui.label(RichText::new(format!("You have {}.", update::current_label())).color(ui.visuals().weak_text_color()));
+            ui.add_space(6.0);
+            let notes = release.notes.trim();
+            if !notes.is_empty() {
+                egui::Frame::new().fill(ui.visuals().extreme_bg_color).inner_margin(egui::Margin::same(8)).corner_radius(8).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.label(truncate(notes, 1600));
+                    });
+                });
+            }
+            if release.asset.is_none() {
+                ui.add_space(4.0);
+                ui.label("This release has no installer for this system; its page has the files.");
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(release.asset.is_some(), egui::Button::new(RichText::new("Download & install").color(Color32::WHITE)).fill(theme::ACCENT))
+                    .clicked()
+                {
+                    install = true;
+                }
+                if ui.button("Later").clicked() {
+                    later = true;
+                }
+                if ui.button("Skip this version").clicked() {
+                    skip = true;
+                }
+                if ui.button(icon::ARROW_SQUARE_OUT).on_hover_text("Open the release page").clicked() {
+                    page = true;
+                }
+            });
+        });
+        if install {
+            self.update.install();
+        }
+        if later {
+            self.update_dismissed = true;
+            self.update.dismiss();
+        }
+        if skip {
+            self.update.skip();
+            self.update_dismissed = true;
+        }
+        if page {
+            self.report(update::open_page(&release.page));
+        }
+    }
+
     /// A preset holding what is on screen now, ready to be written out or stored.
     fn preset_from_doc(&self, name: String) -> Option<Preset> {
         Some(Preset { name, background: self.doc.background.clone()?, counter: Some(self.counter_style.clone()), commentary: self.commentary_style() })
@@ -1662,7 +1764,7 @@ impl Editor {
         (2..).map(|n| format!("{wanted} {n}")).find(|name| !taken(name)).unwrap_or_else(|| wanted.to_owned())
     }
 
-    /// Write the look on screen to a preset file another copy of ShotCraft4Kept can read.
+    /// Write the look on screen to a preset file another copy of KeptCraft can read.
     fn export_preset(&mut self) {
         let Some(preset) = self.preset_from_doc(self.preset_active.clone().unwrap_or_else(|| "My preset".to_owned())) else {
             self.flash("Turn on the background tool, then export the preset");
@@ -1670,7 +1772,7 @@ impl Editor {
         };
         let file = format!("{}.{PRESET_EXT}", preset.name.replace(['/', '\\', ':'], "-"));
         let Some(path) =
-            rfd::FileDialog::new().set_directory(&self.settings.save_dir).set_file_name(file).add_filter("ShotCraft preset", &[PRESET_EXT]).save_file()
+            rfd::FileDialog::new().set_directory(&self.settings.save_dir).set_file_name(file).add_filter("KeptCraft preset", &[PRESET_EXT]).save_file()
         else {
             return;
         };
@@ -1682,7 +1784,7 @@ impl Editor {
 
     /// Read a preset file, keep it with the presets and put it on the document.
     fn import_preset(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("ShotCraft preset", &[PRESET_EXT]).pick_file() else {
+        let Some(path) = rfd::FileDialog::new().add_filter("KeptCraft preset", &[PRESET_EXT, LEGACY_PRESET_EXT]).pick_file() else {
             return;
         };
         let read = Preset::load_file(&path).map_err(|e| format!("Could not read {}: {e}", path.display()));
@@ -2277,7 +2379,7 @@ impl Editor {
         ui.horizontal(|ui| {
             let mut header = c.header.is_some();
             if ui.checkbox(&mut header, "Header").on_hover_text("A title over the comments").changed() {
-                c.header = header.then(shotcraft_engine::doc::model::commentary_header);
+                c.header = header.then(keptcraft_engine::doc::model::commentary_header);
                 changed = true;
             }
             if let Some(text) = &mut c.header {
@@ -2497,7 +2599,7 @@ impl Editor {
         self.load_document(Doc::new(RgbaImage::new(1, 1)), None);
         self.home = true;
         self.saved_revision = self.revision;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title("ShotCraft4Kept".to_owned()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title("KeptCraft".to_owned()));
     }
 
     /// The window with no document: the last edits, then Kept's latest captures, as thumbnails.
@@ -2518,7 +2620,7 @@ impl Editor {
             ui.horizontal_centered(|ui| {
                 self.file_menu(ui);
                 ui.separator();
-                ui.label(RichText::new("ShotCraft4Kept").size(15.0).strong());
+                ui.label(RichText::new("KeptCraft").size(15.0).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let open = egui::Button::new(RichText::new(format!("{}  Open a file…", icon::FOLDER_OPEN)).color(Color32::WHITE)).fill(theme::ACCENT);
                     if ui.add(open).clicked()
@@ -2583,8 +2685,8 @@ impl Editor {
         }
         let mut tiles = Vec::new();
         if self.settings.kept.enabled
-            && let Some(kept) = shotcraft_engine::kept::detect()
-            && let Ok(clips) = shotcraft_engine::kept::recent_images(&kept, (KEPT_ROWS * 3) as u32)
+            && let Some(kept) = keptcraft_engine::kept::detect()
+            && let Ok(clips) = keptcraft_engine::kept::recent_images(&kept, (KEPT_ROWS * 3) as u32)
         {
             tiles = clips
                 .into_iter()
@@ -2613,7 +2715,7 @@ impl Editor {
         if hover {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        resp.on_hover_text("Open an image or a .shotcraft project")
+        resp.on_hover_text("Open an image or a .keptcraft project")
     }
 
     /// Lay tiles out three to a row, at most `rows` rows, and report the one clicked.
@@ -3335,6 +3437,19 @@ impl eframe::App for Editor {
         let ctx = &root.ctx().clone();
         // Thumbnails decode one per frame wherever they are drawn, so nothing stalls the window.
         self.thumbs_frame = 0;
+        // The daily check for a new version; the preference and the clock decide whether it runs.
+        if let Some(stage) = self.update.poll()
+            && let update_ui::Stage::Message(text) = stage
+        {
+            self.flash(text);
+        }
+        self.update.auto_check(self.settings.update_auto);
+        if matches!(self.update.stage(), update_ui::Stage::Started) && !self.closing_for_update {
+            // The installer replaces the program files, so this window has to go: the usual close
+            // path keeps unsaved edits behind its save prompt.
+            self.closing_for_update = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         if let Some((_, rx)) = &self.task
             && let Ok(result) = rx.try_recv()
         {
@@ -3346,6 +3461,7 @@ impl eframe::App for Editor {
         }
         if self.home {
             self.start_screen(root);
+            self.update_dialog(ctx);
             return;
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
@@ -3449,6 +3565,7 @@ impl eframe::App for Editor {
 
         self.gradient_window(ctx);
         self.colour_window(ctx);
+        self.update_dialog(ctx);
 
         if self.confirm_close {
             egui::Modal::new(egui::Id::new("confirm-close")).show(ctx, |ui| {
@@ -3491,7 +3608,7 @@ mod tests {
                 strip.put_pixel(x, y, image::Rgba([230, 40, 40, 255]));
             }
         }
-        let path = std::env::temp_dir().join(format!("shotcraft-cover-{}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!("keptcraft-cover-{}.png", std::process::id()));
         strip.save(&path).unwrap();
 
         let thumb = cover_thumb(&path).unwrap();

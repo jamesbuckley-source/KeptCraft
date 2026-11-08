@@ -1,4 +1,4 @@
-//! The host-visible contract of `shotcraft mcp`: what hosts store (tool and parameter names) and how
+//! The host-visible contract of `keptcraft mcp`: what hosts store (tool and parameter names) and how
 //! bad arguments come back (as tool results the model can read, not JSON-RPC errors).
 
 use std::io::{BufRead, BufReader, Write};
@@ -29,7 +29,7 @@ fn request(stdin: &mut ChildStdin, lines: &Receiver<String>, id: u64, method: &s
 
 #[test]
 fn hosts_see_a_stable_contract() {
-    let dir = std::env::temp_dir().join(format!("shotcraft-mcp-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("keptcraft-mcp-{}", std::process::id()));
     let stored = "20261017-101502117-04211";
     std::fs::create_dir_all(dir.join("history").join(stored)).unwrap();
     std::fs::write(
@@ -39,18 +39,18 @@ fn hosts_see_a_stable_contract() {
     .unwrap();
     image::RgbaImage::new(2, 1).save(dir.join("history").join(stored).join("capture.png")).unwrap();
     std::fs::write(dir.join("settings.json"), json!({"save_dir": dir}).to_string()).unwrap();
-    let mut server = Command::new(env!("CARGO_BIN_EXE_shotcraft4kept"));
+    let mut server = Command::new(env!("CARGO_BIN_EXE_keptcraft"));
     // No display: a window the server launches must fail, not open on the machine running the tests.
-    server.arg("mcp").env("SHOTCRAFT_HOME", &dir).env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY");
+    server.arg("mcp").env("KEPTCRAFT_HOME", &dir).env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY");
     let mut child = server.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let (tx, lines) = mpsc::channel();
     std::thread::spawn(move || BufReader::new(stdout).lines().map_while(Result::ok).try_for_each(|line| tx.send(line)));
 
-    let init = json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "shotcraft-test", "version": "0"}});
+    let init = json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "keptcraft-test", "version": "0"}});
     let server = request(&mut stdin, &lines, 1, "initialize", init)["serverInfo"].clone();
-    assert_eq!((server["name"].as_str(), server["version"].as_str()), (Some("shotcraft4kept"), Some(env!("CARGO_PKG_VERSION"))));
+    assert_eq!((server["name"].as_str(), server["version"].as_str()), (Some("keptcraft"), Some(env!("CARGO_PKG_VERSION"))));
     send(&mut stdin, json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     let tools = request(&mut stdin, &lines, 2, "tools/list", json!({}));
@@ -87,7 +87,7 @@ fn hosts_see_a_stable_contract() {
     assert_eq!(bad_type["isError"], true, "{bad_type}");
 
     let listed = request(&mut stdin, &lines, 5, "tools/call", json!({"name": "list_captures", "arguments": {}}));
-    assert_eq!(listed["structuredContent"]["captures"][0]["id"], stored, "the history in SHOTCRAFT_HOME, and only it: {listed}");
+    assert_eq!(listed["structuredContent"]["captures"][0]["id"], stored, "the history in KEPTCRAFT_HOME, and only it: {listed}");
     assert_eq!(listed["structuredContent"]["captures"].as_array().map(Vec::len), Some(1), "{listed}");
     let windows = request(&mut stdin, &lines, 6, "tools/call", json!({"name": "list_windows", "arguments": {}}));
     assert!(windows["isError"] == false && windows["structuredContent"]["windows"].is_array(), "{windows}");

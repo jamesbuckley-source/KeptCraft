@@ -1,17 +1,17 @@
-//! `shotcraft mcp`: Model Context Protocol over stdin/stdout. Thin: decode, run the engine op on the
+//! `keptcraft mcp`: Model Context Protocol over stdin/stdout. Thin: decode, run the engine op on the
 //! blocking pool, encode. Never writes to stdout itself. Bad arguments and failures are tool errors the
 //! model can read and fix; only an unknown tool name is a protocol error (rmcp's router answers that).
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use keptcraft_engine::ops::{self, View};
+use keptcraft_engine::{Error, history, share};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject};
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use shotcraft_engine::ops::{self, View};
-use shotcraft_engine::{Error, history, share};
 
 #[derive(Clone)]
 pub struct Server;
@@ -27,7 +27,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Capture a display, or an area of it, into ShotCraft history. Returns the history id, the full-resolution size and a downscaled preview image. Shows nothing to the user.",
+        description = "Capture a display, or an area of it, into KeptCraft history. Returns the history id, the full-resolution size and a downscaled preview image. Shows nothing to the user.",
         input_schema = schema_for_type::<ops::CaptureScreen>(),
         annotations(title = "Capture screen", read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false)
     )]
@@ -36,7 +36,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Capture one window, by its list_windows id, into ShotCraft history. Returns the history id, the full-resolution size and a downscaled preview image. Shows nothing to the user.",
+        description = "Capture one window, by its list_windows id, into KeptCraft history. Returns the history id, the full-resolution size and a downscaled preview image. Shows nothing to the user.",
         input_schema = schema_for_type::<ops::CaptureWindow>(),
         annotations(title = "Capture window", read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false)
     )]
@@ -45,7 +45,7 @@ impl Server {
     }
 
     #[tool(
-        description = "List captures in ShotCraft history, newest first, including the ones the user took.",
+        description = "List captures in KeptCraft history, newest first, including the ones the user took.",
         input_schema = schema_for_type::<ops::ListCaptures>(),
         annotations(title = "List captures", read_only_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
@@ -99,7 +99,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Hand a stored capture to the user in a ShotCraft window: the editor, a pinned window or Quick Access.",
+        description = "Hand a stored capture to the user in a KeptCraft window: the editor, a pinned window or Quick Access.",
         input_schema = schema_for_type::<ops::ShowCapture>(),
         annotations(title = "Show capture", read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false)
     )]
@@ -121,8 +121,8 @@ impl Server {
 }
 
 #[tool_handler(
-    name = "shotcraft4kept",
-    instructions = "Captures land in ShotCraft4Kept history; pass the returned id to the other tools. Area coordinates are full-resolution pixels of the captured image. Nothing appears on the user's screen or clipboard unless you call copy_capture or show_capture."
+    name = "keptcraft",
+    instructions = "Captures land in KeptCraft history; pass the returned id to the other tools. Area coordinates are full-resolution pixels of the captured image. Nothing appears on the user's screen or clipboard unless you call copy_capture or show_capture."
 )]
 impl ServerHandler for Server {}
 
@@ -136,7 +136,7 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 /// Decode the arguments into the op's request, then run it like `blocking`.
-async fn call<P, T>(args: JsonObject, op: impl FnOnce(P) -> shotcraft_engine::Result<T> + Send + 'static) -> Result<T, String>
+async fn call<P, T>(args: JsonObject, op: impl FnOnce(P) -> keptcraft_engine::Result<T> + Send + 'static) -> Result<T, String>
 where
     P: DeserializeOwned + Send + 'static,
     T: Send + 'static,
@@ -147,10 +147,10 @@ where
 
 /// Run an engine op off the async thread, so the server keeps answering. A panic arrives as a `JoinError`
 /// and becomes a message like an engine error, leaving the server running.
-async fn blocking<T: Send + 'static>(op: impl FnOnce() -> shotcraft_engine::Result<T> + Send + 'static) -> Result<T, String> {
+async fn blocking<T: Send + 'static>(op: impl FnOnce() -> keptcraft_engine::Result<T> + Send + 'static) -> Result<T, String> {
     match tokio::task::spawn_blocking(op).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err @ Error::ScreenRecording(_))) => Err(format!("{err:#} The permission belongs to the app that started `shotcraft mcp`.")),
+        Ok(Err(err @ Error::ScreenRecording(_))) => Err(format!("{err:#} The permission belongs to the app that started `keptcraft mcp`.")),
         Ok(Err(err)) => Err(format!("{err:#}")),
         Err(join) => Err(match join.try_into_panic() {
             Ok(panic) => format!("internal error: {}", crate::panic_message(&*panic)),

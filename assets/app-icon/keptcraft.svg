@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- ShotCraft app icon: viewfinder corners (capture) and an annotation arrow (edit, share). -->
+  <!-- KeptCraft app icon: viewfinder corners (capture) and an annotation arrow (edit, share). -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3AA0FF"/>
-      <stop offset="1" stop-color="#3D3BDB"/>
+      <stop offset="0" stop-color="#13151E"/>
+      <stop offset="1" stop-color="#13151E"/>
     </linearGradient>
     <radialGradient id="sheen" cx="0.3" cy="0.12" r="0.75">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
@@ -30,7 +30,7 @@
     <path d="M196 400 H136 a24 24 0 0 1 -24 -24 V316"/>
   </g>
   <g transform="translate(256 256) scale(0.9) translate(-256 -256)">
-    <use href="#arrow-shape" fill="#14205E" stroke="#14205E" opacity="0.45" transform="translate(4 12)" filter="url(#shadow)"/>
+    <use href="#arrow-shape" fill="#000000" stroke="#000000" opacity="0.55" transform="translate(4 12)" filter="url(#shadow)"/>
     <use href="#arrow-shape" fill="url(#arrow)" stroke="url(#arrow)"/>
   </g>
 </svg>

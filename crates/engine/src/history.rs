@@ -1,6 +1,6 @@
 //! Capture history: every capture is kept on disk with its editable project.
 //!
-//! Layout: `<data>/history/<id>/{capture.png, project.shotcraft, meta.json, thumb.png}`.
+//! Layout: `<data>/history/<id>/{capture.png, project.keptcraft, meta.json, thumb.png}`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -68,7 +68,7 @@ pub fn image_path(id: &str) -> PathBuf {
 }
 
 pub fn project_path(id: &str) -> PathBuf {
-    entry_dir(id).join("project.shotcraft")
+    entry_dir(id).join("project.keptcraft")
 }
 
 fn new_id() -> String {
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn entry_folders_are_created_exclusively() {
-        let root = std::env::temp_dir().join(format!("shotcraft-history-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("keptcraft-history-{}", std::process::id()));
         let ids = [create_unique_dir(&root, "x").unwrap(), create_unique_dir(&root, "x").unwrap()];
         let unreachable = create_unique_dir(&root, "missing/x");
         std::fs::remove_dir_all(&root).ok();

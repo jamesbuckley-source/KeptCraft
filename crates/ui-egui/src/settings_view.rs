@@ -10,12 +10,13 @@ use egui::{
 use egui_phosphor::regular as icon;
 use global_hotkey::hotkey::HotKey;
 
-use shotcraft_engine::config::{self, ExportFormat, QuickAccessSide, Settings, WindowCaptureStyle};
-use shotcraft_engine::doc::fonts;
-use shotcraft_engine::kept;
-use shotcraft_engine::share;
+use keptcraft_engine::config::{self, ExportFormat, QuickAccessSide, Settings, WindowCaptureStyle};
+use keptcraft_engine::doc::fonts;
+use keptcraft_engine::kept;
+use keptcraft_engine::share;
+use keptcraft_engine::update;
 
-use crate::theme;
+use crate::{theme, update_ui};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -62,14 +63,20 @@ struct SettingsApp {
     kept_note: Option<String>,
     headers_text: String,
     icon: Option<TextureHandle>,
+    /// The daily GitHub check, its download and its installer.
+    update: update_ui::Updater,
+    /// What the last check said, shown under the version.
+    update_note: Option<String>,
 }
 
 pub fn run(tab: Option<String>) -> anyhow::Result<()> {
     let tab = tab.and_then(|t| TABS.iter().find(|x| x.1 == t.to_ascii_lowercase()).map(|x| x.0)).unwrap_or(Tab::General);
-    let builder = egui::ViewportBuilder::default().with_title("ShotCraft4Kept Settings").with_inner_size(vec2(780.0, 560.0)).with_resizable(false);
+    let builder = egui::ViewportBuilder::default().with_title("KeptCraft Settings").with_inner_size(vec2(780.0, 560.0)).with_resizable(false);
     let settings = Settings::load();
-    theme::run("shotcraft-settings", builder, move |ctx| SettingsApp {
+    theme::run("keptcraft-settings", builder, move |ctx| SettingsApp {
         headers_text: settings.upload.headers.join("\n"),
+        update: update_ui::Updater::new(),
+        update_note: None,
         saved: settings.clone(),
         settings,
         tab,
@@ -367,6 +374,15 @@ fn nav_item(ui: &mut Ui, glyph: &str, label: &str, selected: bool) -> Response {
 
 impl SettingsApp {
     fn general(&mut self, ui: &mut Ui) {
+        // The daily check for a new version; its result lands in the Updates rows below.
+        if let Some(stage) = self.update.poll() {
+            self.update_note = match stage {
+                update_ui::Stage::Message(text) => Some(text),
+                update_ui::Stage::UpToDate => Some(format!("KeptCraft {} is the newest version.", update::current_label())),
+                _ => self.update_note.take(),
+            };
+        }
+        self.update.auto_check(self.settings.update_auto);
         let s = &mut self.settings;
         group(ui, "After capture", |rows| {
             rows.switch("Show Quick Access", Some("A floating preview to copy, save, annotate, pin or drag the capture"), &mut s.show_quick_access);
@@ -390,6 +406,42 @@ impl SettingsApp {
                 });
             }
         });
+        let busy = self.update.busy();
+        let offering = self.update.offering().cloned();
+        // The note doubles as the reason the Update button is there, so it says what it will do.
+        let note = match (&offering, self.update_note.clone()) {
+            (Some(release), _) => Some(format!("KeptCraft {} is ready to install.", release.version_label())),
+            (None, note) => note,
+        };
+        group(ui, "Updates", |rows| {
+            rows.row("Version", note.as_deref(), |ui| {
+                ui.label(update::current_label());
+                let label = if busy { "Checking…" } else { "Update" };
+                let button = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(theme::ACCENT);
+                if ui.add_enabled(!busy, button).clicked() {
+                    self.update_note = None;
+                    // One button: it looks for a new version, then installs the one it found.
+                    if self.update.offering().is_some() {
+                        self.update.install();
+                    } else {
+                        self.update.check_now();
+                    }
+                }
+            });
+            if let Some(release) = &offering {
+                let release = release.clone();
+                rows.row("Release notes", Some("What changed in this version"), |ui| {
+                    if ui.button("Open").clicked() {
+                        self.update_note = update::open_page(&release.page).err().map(|e| format!("{e:#}"));
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        self.update_note = Some(format!("KeptCraft {} will not be mentioned again.", release.version_label()));
+                        self.update.skip();
+                    }
+                });
+            }
+            rows.switch("Update automatically", Some("Look for a new version once a day when KeptCraft opens"), &mut s.update_auto);
+        });
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
@@ -398,7 +450,7 @@ impl SettingsApp {
                 ui,
                 icon::INFO,
                 theme::ACCENT,
-                "These shortcuts need an X11 session. On Wayland, bind your desktop's own shortcuts to commands such as shotcraft capture-area.",
+                "These shortcuts need an X11 session. On Wayland, bind your desktop's own shortcuts to commands such as keptcraft capture-area.",
             );
         }
         if let Some(row) = self.recording {
@@ -655,21 +707,31 @@ impl SettingsApp {
         ui.add_space(18.0);
         ui.horizontal(|ui| {
             if let Some(icon) = &self.icon {
-                ui.add(egui::Image::new((icon.id(), vec2(64.0, 64.0))));
+                ui.add(egui::Image::new((icon.id(), vec2(72.0, 72.0))));
             }
             ui.vertical(|ui| {
-                ui.add_space(6.0);
-                ui.label(RichText::new("ShotCraft4Kept").font(medium(18.0)).color(ui.visuals().strong_text_color()));
+                ui.add_space(8.0);
+                ui.label(RichText::new("KeptCraft").font(medium(20.0)).color(ui.visuals().strong_text_color()));
                 ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(ui.visuals().weak_text_color()));
-                ui.label("A ShotCraft fork that works with the Kept clipboard manager.");
+                ui.label("The screenshot editor for the Kept clipboard manager.");
                 ui.label(RichText::new("Capture, annotate, redact and share screenshots.").color(ui.visuals().weak_text_color()));
             });
         });
-        group(ui, "", |rows| {
-            rows.row("Command line", Some("Every capture mode is also a command"), |ui| ui.label(RichText::new("shotcraft4kept --help").monospace()));
-            rows.row("Source code", Some(env!("CARGO_PKG_REPOSITORY")), |ui| copy_button(ui, env!("CARGO_PKG_REPOSITORY"), "link"));
-            rows.row("Upstream", Some("The ShotCraft this fork is built on"), |ui| copy_button(ui, "https://github.com/mmartinez/shotcraft", "link"));
+        note(
+            ui,
+            "KeptCraft is a fork of ShotCraft. Every part of the capture overlay, the canvas and the renderer below this point comes from that project, and so does most of the code that has been changed since.",
+        );
+        group(ui, "This build", |rows| {
+            rows.row("Command line", Some("Every capture mode is also a command"), |ui| ui.label(RichText::new("keptcraft --help").monospace()));
+            rows.row("Source code", Some("KeptCraft's own repository"), |ui| copy_button(ui, env!("CARGO_PKG_REPOSITORY"), "link"));
+            rows.row("Releases", Some("Installers, and the page the updater reads"), |ui| copy_button(ui, update::RELEASES_PAGE, "link"));
             rows.row("License", None, |ui| ui.label(env!("CARGO_PKG_LICENSE")));
+        });
+        group(ui, "Built on ShotCraft", |rows| {
+            rows.row("Original project", Some("ShotCraft, the screenshot tool this fork started from"), |ui| {
+                copy_button(ui, "https://github.com/mmartinez/shotcraft", "link")
+            });
+            rows.row("Author", Some("Miguel Martinez, and the ShotCraft contributors"), |ui| copy_button(ui, "https://github.com/mmartinez", "link"));
         });
     }
 }

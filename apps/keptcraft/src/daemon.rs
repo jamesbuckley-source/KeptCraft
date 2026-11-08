@@ -1,5 +1,5 @@
 //! Background process: tray menu and global shortcuts. Each action runs as a child process
-//! (`shotcraft <command>`), so a crashing capture never takes the tray down.
+//! (`keptcraft <command>`), so a crashing capture never takes the tray down.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -15,9 +15,10 @@ use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
-use shotcraft_engine::config::{Settings, run_dir};
-use shotcraft_engine::share;
-use shotcraft_ui_egui::theme;
+use keptcraft_engine::config::{Settings, run_dir};
+use keptcraft_engine::share;
+use keptcraft_engine::update;
+use keptcraft_ui_egui::theme;
 
 enum UserEvent {
     Hotkey(GlobalHotKeyEvent),
@@ -36,7 +37,7 @@ struct Daemon {
 }
 
 pub(crate) const MENU: [Option<(&str, &str)>; 19] = [
-    Some(("Open ShotCraft4Kept Editor", "open-annotate")),
+    Some(("Open KeptCraft Editor", "open-annotate")),
     None,
     Some(("All-In-One", "all-in-one")),
     Some(("Capture Area", "capture-area")),
@@ -54,14 +55,14 @@ pub(crate) const MENU: [Option<(&str, &str)>; 19] = [
     Some(("Restore Recently Closed", "restore-recently-closed")),
     None,
     Some(("Settings…", "open-settings")),
-    Some(("Quit ShotCraft4Kept", "quit")),
+    Some(("Quit KeptCraft", "quit")),
 ];
 
 pub fn run() -> anyhow::Result<()> {
     std::fs::create_dir_all(run_dir())?;
     let lock = File::options().create(true).truncate(false).write(true).open(run_dir().join("daemon.lock"))?;
     if lock.try_lock().is_err() {
-        share::notify("ShotCraft4Kept is already running", "Use the tray icon or your shortcuts.");
+        share::notify("KeptCraft is already running", "Use the tray icon or your shortcuts.");
         return Ok(());
     }
     #[allow(unused_mut)]
@@ -113,7 +114,7 @@ impl Daemon {
                 eprintln!("tray menu: {e}");
             }
         }
-        let mut tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("ShotCraft4Kept");
+        let mut tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("KeptCraft");
         if let Some(icon) = theme::app_icon(64).and_then(|(rgba, size)| tray_icon::Icon::from_rgba(rgba, size, size).ok()) {
             tray = tray.with_icon(icon);
         }
@@ -127,6 +128,22 @@ impl Daemon {
         }
         self.apply_hotkeys(&settings);
         self.settings_mtime = Settings::modified();
+        // The daemon starts with the session, so its launch is where a daily update check belongs:
+        // a tray-only user still hears about a new version, and Settings, General installs it.
+        if settings.update_auto {
+            std::thread::spawn(|| {
+                if !update::due() {
+                    return;
+                }
+                let found = update::fetch();
+                update::record_check();
+                if let Ok(Some(release)) = found
+                    && !release.is_skipped()
+                {
+                    share::notify("KeptCraft update ready", &format!("Version {} is available. Settings, General installs it.", release.version_label()));
+                }
+            });
+        }
     }
 
     fn apply_hotkeys(&mut self, settings: &Settings) {

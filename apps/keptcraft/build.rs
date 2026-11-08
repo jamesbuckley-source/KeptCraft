@@ -4,7 +4,7 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
-        embed_manifest::embed_manifest(embed_manifest::new_manifest("ShotCraft4Kept.ShotCraft4Kept"))?;
+        embed_manifest::embed_manifest(embed_manifest::new_manifest("KeptCraft.KeptCraft"))?;
     }
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())

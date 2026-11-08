@@ -2649,6 +2649,91 @@ dependencies = [
 ]
 
 [[package]]
+name = "keptcraft"
+version = "0.3.0-beta.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "embed-manifest",
+ "global-hotkey",
+ "image",
+ "keptcraft-engine",
+ "keptcraft-ui-egui",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tray-icon",
+ "winit",
+]
+
+[[package]]
+name = "keptcraft-doc"
+version = "0.3.0-beta.1"
+dependencies = [
+ "base64",
+ "ecolor",
+ "emath",
+ "epaint_default_fonts",
+ "image",
+ "serde",
+ "serde_json",
+ "skrifa 0.48.0",
+ "thiserror 2.0.21",
+ "tiny-skia 0.12.0",
+]
+
+[[package]]
+name = "keptcraft-engine"
+version = "0.3.0-beta.1"
+dependencies = [
+ "arboard",
+ "chrono",
+ "dirs",
+ "emath",
+ "enigo",
+ "image",
+ "keptcraft-doc",
+ "objc2-core-graphics",
+ "ocrs",
+ "ring",
+ "rqrr",
+ "rten",
+ "rusqlite",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
+ "x11rb 0.14.0",
+ "xcap",
+]
+
+[[package]]
+name = "keptcraft-ui-egui"
+version = "0.3.0-beta.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "drag",
+ "eframe",
+ "egui",
+ "egui-phosphor",
+ "enigo",
+ "global-hotkey",
+ "image",
+ "keptcraft-engine",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "rfd",
+ "x11rb 0.14.0",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4618,90 +4703,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "shotcraft-doc"
-version = "0.2.0-beta.1"
-dependencies = [
- "base64",
- "ecolor",
- "emath",
- "epaint_default_fonts",
- "image",
- "serde",
- "serde_json",
- "skrifa 0.48.0",
- "thiserror 2.0.21",
- "tiny-skia 0.12.0",
-]
-
-[[package]]
-name = "shotcraft-engine"
-version = "0.2.0-beta.1"
-dependencies = [
- "arboard",
- "chrono",
- "dirs",
- "emath",
- "enigo",
- "image",
- "objc2-core-graphics",
- "ocrs",
- "ring",
- "rqrr",
- "rten",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "shotcraft-doc",
- "thiserror 2.0.21",
- "ureq",
- "x11rb 0.14.0",
- "xcap",
-]
-
-[[package]]
-name = "shotcraft-ui-egui"
-version = "0.2.0-beta.1"
-dependencies = [
- "anyhow",
- "chrono",
- "drag",
- "eframe",
- "egui",
- "egui-phosphor",
- "enigo",
- "global-hotkey",
- "image",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "raw-window-handle",
- "rfd",
- "shotcraft-engine",
- "x11rb 0.14.0",
-]
-
-[[package]]
-name = "shotcraft4kept"
-version = "0.2.0-beta.1"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "embed-manifest",
- "global-hotkey",
- "image",
- "rmcp",
- "serde",
- "serde_json",
- "shotcraft-engine",
- "shotcraft-ui-egui",
- "tokio",
- "tray-icon",
- "winit",
-]
 
 [[package]]
 name = "signal-hook-registry"

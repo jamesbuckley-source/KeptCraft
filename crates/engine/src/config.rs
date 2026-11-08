@@ -7,14 +7,16 @@ use serde::{Deserialize, Serialize};
 use crate::Result;
 use crate::doc::model::{Background, OwnedGradient};
 
-const APP_DIR: &str = "shotcraft4kept";
-/// The folder this fork used before it was renamed; a fresh install takes its settings from there once.
-const LEGACY_APP_DIR: &str = "shotcraft";
+const APP_DIR: &str = "keptcraft";
+/// Folders this fork used before it was renamed; a fresh install takes its settings from the newest
+/// one that exists, so the save folder, palette and Kept editor path survive the renames.
+const LEGACY_APP_DIRS: [&str; 2] = ["shotcraft4kept", "shotcraft"];
 
-/// `SHOTCRAFT4KEPT_HOME` keeps settings and data in that one folder instead of the platform's (tests,
-/// sandboxes); `SHOTCRAFT_HOME` stays because existing scripts and Kept's handoff pass it.
+/// `KEPTCRAFT_HOME` keeps settings and data in that one folder instead of the platform's (tests,
+/// sandboxes). The names it had before the rename stay, because existing scripts and Kept's handoff
+/// pass them.
 fn home_override() -> Option<PathBuf> {
-    ["SHOTCRAFT4KEPT_HOME", "SHOTCRAFT_HOME"].iter().find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from))
+    ["KEPTCRAFT_HOME", "SHOTCRAFT4KEPT_HOME", "SHOTCRAFT_HOME"].iter().find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from))
 }
 
 pub fn config_dir() -> PathBuf {
@@ -205,18 +207,20 @@ pub struct Preset {
     pub background: Background,
     /// Numbered-step settings: a preset brings back the counter look as well as the background.
     #[serde(default)]
-    pub counter: Option<shotcraft_doc::model::CounterStyle>,
+    pub counter: Option<keptcraft_doc::model::CounterStyle>,
     /// The comment band's look, without the comments themselves.
     #[serde(default)]
-    pub commentary: Option<shotcraft_doc::model::Commentary>,
+    pub commentary: Option<keptcraft_doc::model::Commentary>,
 }
 
 /// The extension a shared preset travels in. The file is a preset's own JSON: a background image or
 /// watermark is already part of it as base64 PNG, so the one file carries everything.
-pub const PRESET_EXT: &str = "shotpreset";
+pub const PRESET_EXT: &str = "keptpreset";
+/// The extension a preset had before the rename; those files still import.
+pub const LEGACY_PRESET_EXT: &str = "shotpreset";
 
 impl Preset {
-    /// Write this preset where another copy of ShotCraft4Kept can read it.
+    /// Write this preset where another copy of KeptCraft can read it.
     pub fn save_file(&self, path: &Path) -> Result<()> {
         write_json(path, self)
     }
@@ -262,13 +266,15 @@ pub struct Settings {
     pub gradients: Vec<OwnedGradient>,
     pub presets: Vec<Preset>,
     pub palette: Vec<[u8; 4]>,
+    /// Check GitHub for a new version once a day when KeptCraft opens.
+    pub update_auto: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // Captures get a folder of their own: a Kept user should not find them on the Desktop, and
         // Kept watches this folder for edits (it reads `save_dir` from settings.json).
-        let save_dir = dirs::picture_dir().or_else(dirs::desktop_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("ShotCraft4Kept");
+        let save_dir = dirs::picture_dir().or_else(dirs::desktop_dir).or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("KeptCraft");
         Self {
             save_dir,
             export_format: ExportFormat::Png,
@@ -293,6 +299,9 @@ impl Default for Settings {
             gradients: Vec::new(),
             presets: Vec::new(),
             palette: default_palette(),
+            // A screenshot tool that gets fixes quietly is worth more than one that has to be
+            // remembered about; the check is one request a day and the update is the user's choice.
+            update_auto: true,
         }
     }
 }
@@ -316,11 +325,11 @@ impl Settings {
         if let Some(settings) = read_json(&settings_path()) {
             return settings;
         }
-        // The fork was named ShotCraft until the rename: a fresh folder inherits those settings, so the
-        // save folder, palette and the Kept editor path survive it.
+        // The fork had other names before this one: a fresh folder inherits the newest settings found
+        // there, so the save folder, palette and the Kept editor path survive the rename.
         let legacy = home_override()
             .is_none()
-            .then(|| dirs::config_dir().map(|d| d.join(LEGACY_APP_DIR).join("settings.json")))
+            .then(|| LEGACY_APP_DIRS.iter().filter_map(|dir| dirs::config_dir().map(|d| d.join(dir).join("settings.json"))).find(|path| path.is_file()))
             .flatten()
             .and_then(|legacy| read_json::<Self>(&legacy));
         match legacy {
@@ -397,6 +406,10 @@ pub struct State {
     pub background_width: Option<f32>,
     /// Whether the background panel was left collapsed to its rail.
     pub background_collapsed: Option<bool>,
+    /// Unix time of the last check for a new release; an automatic check waits a day.
+    pub update_checked_at: Option<i64>,
+    /// A version the user asked not to be told about again.
+    pub update_skipped: Option<String>,
 }
 
 impl State {
@@ -452,8 +465,9 @@ mod tests {
     fn defaults_suit_a_clip_manager() {
         let s = Settings::default();
         assert!(s.copy_after_capture, "a capture should reach Kept without a second action");
-        assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("ShotCraft4Kept"), "captures get their own folder, not the Desktop");
+        assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("KeptCraft"), "captures get their own folder, not the Desktop");
         assert!(s.quick_access_auto_close > 0, "the card should not linger once the clip is in Kept");
+        assert!(s.update_auto, "a new version should be offered without a settings trip");
         // Kept binds Alt+V and Alt+Shift+V, and Windows switches keyboard layouts on Alt+Shift.
         let keys = s.hotkeys.entries().into_iter().map(|(_, key)| key).filter(|key| !key.is_empty());
         for key in keys {
@@ -475,14 +489,14 @@ mod tests {
 
     #[test]
     fn presets_carry_the_counter_and_comment_look_and_old_ones_still_load() {
-        use shotcraft_doc::model::{Commentary, CommentarySide, CounterLabel, CounterStyle};
+        use keptcraft_doc::model::{Commentary, CommentarySide, CounterLabel, CounterStyle};
         let style = CounterStyle { size: 36.0, label: CounterLabel::Letters, ..Default::default() };
         let commentary = Commentary {
             side: CommentarySide::Right,
             width: 320.0,
             spacing: 12.0,
             padding: 18.0,
-            text_color: shotcraft_doc::model::Commentary::default().text_color,
+            text_color: keptcraft_doc::model::Commentary::default().text_color,
             header: Some("Notes".into()),
             ..Default::default()
         };
@@ -509,7 +523,7 @@ mod tests {
             counter: None,
             commentary: None,
         };
-        let path = std::env::temp_dir().join(format!("shotcraft-preset-{}.{PRESET_EXT}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("keptcraft-preset-{}.{PRESET_EXT}", std::process::id()));
         preset.save_file(&path).unwrap();
         // One file: the image travels inside the JSON as base64 PNG, so nothing else is needed.
         assert_eq!(Preset::load_file(&path).unwrap(), preset, "the image comes back with the preset");
@@ -520,7 +534,7 @@ mod tests {
     #[test]
     fn private_dir_is_owner_only_even_if_it_existed() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("shotcraft-private-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-private-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         make_private(&dir).unwrap();

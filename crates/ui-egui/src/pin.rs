@@ -9,10 +9,10 @@ use egui::{Color32, Key, Rect, Sense, Stroke, StrokeKind, TextureHandle, Texture
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::Settings;
-use shotcraft_engine::doc::model::Doc;
-use shotcraft_engine::doc::render;
-use shotcraft_engine::{capture, history, share};
+use keptcraft_engine::config::Settings;
+use keptcraft_engine::doc::model::Doc;
+use keptcraft_engine::doc::render;
+use keptcraft_engine::{capture, history, share};
 
 use crate::{dialogs, theme};
 
@@ -44,8 +44,8 @@ pub fn run(source: ImageSource) -> anyhow::Result<()> {
     let fit = (screen.width() * 0.7 / natural.x).min(screen.height() * 0.7 / natural.y).min(1.0);
     let size = (natural * fit).round();
     let pos = screen.center() - size / 2.0;
-    let builder = theme::floating("ShotCraft4Kept pin", pos, size).with_resizable(false);
-    theme::run("shotcraft-pin", builder, move |_| Pin { image, history_id, tex: None, natural, zoom: fit, opacity: 1.0, settings: Settings::load() })
+    let builder = theme::floating("KeptCraft pin", pos, size).with_resizable(false);
+    theme::run("keptcraft-pin", builder, move |_| Pin { image, history_id, tex: None, natural, zoom: fit, opacity: 1.0, settings: Settings::load() })
 }
 
 impl Pin {

@@ -1,4 +1,4 @@
-//! egui windows for ShotCraft. Each public module's `run` owns one process's window(s):
+//! egui windows for KeptCraft. Each public module's `run` owns one process's window(s):
 //! the capture overlay, editor, Quick Access, pin, scrolling capture, history and settings.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,3 +14,4 @@ pub mod quick;
 pub mod scrolling;
 pub mod settings_view;
 pub mod theme;
+pub mod update_ui;

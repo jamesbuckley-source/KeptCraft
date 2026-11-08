@@ -13,10 +13,10 @@ use crate::{Error, Result};
 
 /// Carries a notification body to the `notify` helper. Other users can list command lines on most
 /// systems, but not another user's environment, and a body can be recognized text or a share link.
-pub const NOTIFY_BODY_ENV: &str = "SHOTCRAFT_NOTIFY_BODY";
+pub const NOTIFY_BODY_ENV: &str = "KEPTCRAFT_NOTIFY_BODY";
 
 fn this_app() -> Command {
-    Command::new(std::env::current_exe().map(installed_path).unwrap_or_else(|_| PathBuf::from("shotcraft4kept")))
+    Command::new(std::env::current_exe().map(installed_path).unwrap_or_else(|_| PathBuf::from("keptcraft")))
 }
 
 /// Linux names a running binary that has since been replaced (an update, a rebuild) `<path> (deleted)`;
@@ -30,7 +30,7 @@ fn installed_path(exe: PathBuf) -> PathBuf {
 
 /// Start a child without waiting for it. It gets none of our standard streams: a child that outlives us
 /// (the clipboard owner, a window) would otherwise hold the caller's pipes open, and a caller reading
-/// them (an MCP host, `shotcraft … 2>&1 | cat`) would wait until that child exits.
+/// them (an MCP host, `keptcraft … 2>&1 | cat`) would wait until that child exits.
 fn launch(cmd: &mut Command) {
     match cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         // Reap the child so long-lived parents (the tray daemon) leave no zombies.
@@ -39,7 +39,7 @@ fn launch(cmd: &mut Command) {
     }
 }
 
-/// Launch another mode of this app (`shotcraft <args>`) without waiting for it.
+/// Launch another mode of this app (`keptcraft <args>`) without waiting for it.
 pub fn spawn<I, S>(args: I)
 where
     I: IntoIterator<Item = S>,
@@ -383,7 +383,7 @@ pub fn upload(img: &RgbaImage, settings: &Settings) -> Result<String> {
     }
     check_upload_url(url)?;
     let png = encode(img, ExportFormat::Png, 100)?;
-    let boundary = format!("----shotcraft{:x}", nanos());
+    let boundary = format!("----keptcraft{:x}", nanos());
     let name = default_file_name(ExportFormat::Png);
     let mut body = Vec::with_capacity(png.len() + 512);
     body.extend_from_slice(
@@ -440,10 +440,10 @@ mod tests {
 
     #[test]
     fn a_replaced_binary_is_launched_from_its_path() {
-        let replaced = PathBuf::from("/opt/shot craft/shotcraft (deleted)");
-        let expected = if cfg!(target_os = "linux") { PathBuf::from("/opt/shot craft/shotcraft") } else { replaced.clone() };
+        let replaced = PathBuf::from("/opt/shot craft/keptcraft (deleted)");
+        let expected = if cfg!(target_os = "linux") { PathBuf::from("/opt/shot craft/keptcraft") } else { replaced.clone() };
         assert_eq!(installed_path(replaced), expected);
-        let current = PathBuf::from("/opt/shot craft/shotcraft");
+        let current = PathBuf::from("/opt/shot craft/keptcraft");
         assert_eq!(installed_path(current.clone()), current);
     }
 
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn save_to_writes_exactly_where_it_was_told() {
-        let dir = std::env::temp_dir().join(format!("shotcraft-save-to-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-save-to-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = Settings::default();
         let img = RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]));
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn save_to_takes_the_format_from_the_extension() {
-        let dir = std::env::temp_dir().join(format!("shotcraft-save-format-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-save-format-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = Settings::default();
         let path = save_to(&RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255])), &dir.join("kept.jpeg"), &settings).unwrap();
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn save_names_never_collide() {
-        let dir = std::env::temp_dir().join(format!("shotcraft-unique-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-unique-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (a, _) = create_unique(dir.join("a.png")).unwrap();
         let (b, _) = create_unique(dir.join("a.png")).unwrap();

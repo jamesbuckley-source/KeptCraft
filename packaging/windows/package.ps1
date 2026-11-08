@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Build ShotCraft4Kept and package it for Windows.
+  Build KeptCraft and package it for Windows.
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist\release):
-    shotcraft4kept-<version>-windows-<arch>.msi  per-machine installer with a Start Menu shortcut
-    shotcraft4kept-<version>-windows-<arch>.zip  shotcraft4kept.exe and the license files
+    keptcraft-<version>-windows-<arch>.msi  per-machine installer with a Start Menu shortcut
+    keptcraft-<version>-windows-<arch>.zip  keptcraft.exe and the license files
 
   The C runtime is linked statically (+crt-static), so neither needs the Visual C++ redistributable.
   Nothing is code-signed yet, so SmartScreen warns on first run.
@@ -23,7 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$AppId = 'io.github.jamesbuckley-source.shotcraft4kept'
+$AppId = 'io.github.jamesbuckley-source.keptcraft'
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
@@ -46,15 +46,15 @@ $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'arm64' { 'aarch64
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
-Write-Output "ShotCraft4Kept $Version for Windows $Arch ($Target)"
+Write-Output "KeptCraft $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
   # Static CRT, scoped to the target so build scripts and proc-macros on the host are unaffected.
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p shotcraft4kept --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p keptcraft --target $Target }
 }
-$Exe = Join-Path $TargetDir "$Target\release\shotcraft4kept.exe"
+$Exe = Join-Path $TargetDir "$Target\release\keptcraft.exe"
 
 # The PE header must match -Arch (an x64 build can never ship labelled arm64), and the subsystem must
 # be Windows GUI (2) so no console window opens with the app.
@@ -63,8 +63,8 @@ $pe = [BitConverter]::ToInt32($bytes, 0x3C)
 $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
 $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
 $expected = switch ($Arch) { 'x64' { 0x8664 } 'arm64' { 0xAA64 } }
-if ($machine -ne $expected) { throw "shotcraft4kept.exe is for machine 0x$('{0:X}' -f $machine), expected 0x$('{0:X}' -f $expected)" }
-if ($subsystem -ne 2) { throw "shotcraft4kept.exe has PE subsystem $subsystem, expected 2 (Windows GUI)" }
+if ($machine -ne $expected) { throw "keptcraft.exe is for machine 0x$('{0:X}' -f $machine), expected 0x$('{0:X}' -f $expected)" }
+if ($subsystem -ne 2) { throw "keptcraft.exe has PE subsystem $subsystem, expected 2 (Windows GUI)" }
 
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 $DocDir = Join-Path $Stage 'licenses'
@@ -78,7 +78,7 @@ Copy-Item (Join-Path $Root 'crates\doc\assets\fonts\OFL.txt') (Join-Path $DocDir
 
 # The installer's icon (Start Menu shortcut, Installed apps): an .ico holding the hicolor PNGs as-is,
 # which Windows Vista and later read. A size of 256 is written as 0 in the directory entry.
-$Ico = Join-Path $Stage 'shotcraft4kept.ico'
+$Ico = Join-Path $Stage 'keptcraft.ico'
 $sizes = 16, 24, 32, 48, 64, 128, 256
 $pngs = foreach ($s in $sizes) { , [IO.File]::ReadAllBytes((Join-Path $Root "assets\app-icon\hicolor\${s}x${s}\apps\$AppId.png")) }
 $ms = New-Object IO.MemoryStream
@@ -96,9 +96,9 @@ $w.Flush()
 [IO.File]::WriteAllBytes($Ico, $ms.ToArray())
 
 # ---- MSI ------------------------------------------------------------------------------------------
-$Msi = Join-Path $Dist "shotcraft4kept-$Version-windows-$Arch.msi"
+$Msi = Join-Path $Dist "keptcraft-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'shotcraft4kept.wxs') -arch $Arch `
+  wix build (Join-Path $PSScriptRoot 'keptcraft.wxs') -arch $Arch `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "DocDir=$DocDir" -d "IconPath=$Ico" -o $Msi
 }
 Invoke-Native 'wix msi validate' { wix msi validate $Msi -intermediateFolder (Join-Path $Stage 'msi-validation') }
@@ -106,12 +106,12 @@ Invoke-Native 'wix msi validate' { wix msi validate $Msi -intermediateFolder (Jo
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 
 # ---- zip ------------------------------------------------------------------------------------------
-$ZipDir = Join-Path $TargetDir "windows-package\shotcraft4kept-$Version-windows-$Arch"
+$ZipDir = Join-Path $TargetDir "windows-package\keptcraft-$Version-windows-$Arch"
 Remove-Item -Recurse -Force $ZipDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $ZipDir | Out-Null
-Copy-Item (Join-Path $Stage 'shotcraft4kept.exe') $ZipDir
+Copy-Item (Join-Path $Stage 'keptcraft.exe') $ZipDir
 Copy-Item (Join-Path $DocDir '*') $ZipDir
-$Zip = Join-Path $Dist "shotcraft4kept-$Version-windows-$Arch.zip"
+$Zip = Join-Path $Dist "keptcraft-$Version-windows-$Arch.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $ZipDir -DestinationPath $Zip
 
@@ -120,11 +120,11 @@ Compress-Archive -Path $ZipDir -DestinationPath $Zip
 $HostArch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($Arch -eq $HostArch) {
   $out = Join-Path $Stage 'version.txt'
-  $p = Start-Process -FilePath (Join-Path $Stage 'shotcraft4kept.exe') -ArgumentList '--version' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out
+  $p = Start-Process -FilePath (Join-Path $Stage 'keptcraft.exe') -ArgumentList '--version' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out
   $text = (Get-Content -Raw $out).Trim()
-  if ($p.ExitCode -ne 0 -or $text -ne "shotcraft4kept $Version") { throw "shotcraft4kept.exe --version printed '$text' (exit $($p.ExitCode))" }
+  if ($p.ExitCode -ne 0 -or $text -ne "keptcraft $Version") { throw "keptcraft.exe --version printed '$text' (exit $($p.ExitCode))" }
   Write-Output "ok: $text"
 } else {
-  Write-Output "skipping shotcraft4kept.exe --version: an $Arch build doesn't run on this $HostArch machine"
+  Write-Output "skipping keptcraft.exe --version: an $Arch build doesn't run on this $HostArch machine"
 }
 Get-Item $Msi, $Zip | Format-Table Name, Length

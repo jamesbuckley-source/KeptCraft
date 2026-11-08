@@ -1,6 +1,6 @@
 [package]
-name = "shotcraft4kept"
-description = "ShotCraft4Kept: a screenshot tool for Kept, built on ShotCraft. Capture, annotate, redact, background, scrolling capture, history, OCR, pin."
+name = "keptcraft"
+description = "KeptCraft: a screenshot tool for Kept, built on KeptCraft. Capture, annotate, redact, background, scrolling capture, history, OCR, pin."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,12 +12,12 @@ publish.workspace = true
 workspace = true
 
 [[bin]]
-name = "shotcraft4kept"
+name = "keptcraft"
 path = "src/main.rs"
 
 [dependencies]
-shotcraft-engine = { workspace = true }
-shotcraft-ui-egui = { workspace = true }
+keptcraft-engine = { workspace = true }
+keptcraft-ui-egui = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true }

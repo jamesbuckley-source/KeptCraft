@@ -9,8 +9,9 @@ pub mod kept;
 pub mod ocr;
 pub mod ops;
 pub mod share;
+pub mod update;
 
-pub use shotcraft_doc as doc;
+pub use keptcraft_doc as doc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

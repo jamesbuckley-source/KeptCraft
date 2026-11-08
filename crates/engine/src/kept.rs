@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn detection_reads_kepts_own_configuration() {
-        let root = std::env::temp_dir().join(format!("shotcraft-kept-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("keptcraft-kept-{}", std::process::id()));
         let config = root.join("config");
         let local = root.join("local");
         let data = root.join("data");
@@ -177,13 +177,13 @@ mod tests {
 
     #[test]
     fn the_editor_command_is_a_whole_command_line() {
-        let command = editor_command(Path::new(r"C:\Program Files\ShotCraft4Kept\shotcraft4kept.exe"));
-        assert_eq!(command, "\"C:\\Program Files\\ShotCraft4Kept\\shotcraft4kept.exe\" open-annotate --filepath {file} --overwrite");
+        let command = editor_command(Path::new(r"C:\Program Files\KeptCraft\keptcraft.exe"));
+        assert_eq!(command, "\"C:\\Program Files\\KeptCraft\\keptcraft.exe\" open-annotate --filepath {file} --overwrite");
     }
 
     #[test]
     fn reads_the_newest_images_and_writes_the_editor_setting() {
-        let dir = std::env::temp_dir().join(format!("shotcraft-kept-db-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-kept-db-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(dir.join("media")).unwrap();
         let kept = Kept { exe: None, data_dir: dir.clone(), db: dir.join("copypaste.db"), media: dir.join("media") };

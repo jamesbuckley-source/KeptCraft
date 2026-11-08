@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build ShotCraft4Kept and package it for Linux (<arch> is x86_64 or aarch64, the build machine's):
+# Build KeptCraft and package it for Linux (<arch> is x86_64 or aarch64, the build machine's):
 #
-#   $DIST/shotcraft4kept-<version>-linux-<arch>.AppImage  any distro with glibc 2.35 or newer
-#   $DIST/shotcraft4kept-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
-#   $DIST/shotcraft4kept-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/shotcraft4kept-<version>-linux-<arch>.tar.gz    the same files as a plain bin/ and share/ tree
+#   $DIST/keptcraft-<version>-linux-<arch>.AppImage  any distro with glibc 2.35 or newer
+#   $DIST/keptcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
+#   $DIST/keptcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/keptcraft-<version>-linux-<arch>.tar.gz    the same files as a plain bin/ and share/ tree
 #
 # Usage: packaging/linux/package.sh [--skip-build]
 #
@@ -15,7 +15,7 @@ set -euo pipefail
 # shellcheck source=packaging/env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=io.github.jamesbuckley-source.shotcraft4kept
+APP_ID=io.github.jamesbuckley-source.keptcraft
 
 SKIP_BUILD=0
 case "${1:-}" in
@@ -30,8 +30,8 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; PKG_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-BASENAME="shotcraft4kept-$VERSION-linux-$ARCH"
-echo "==> ShotCraft4Kept $VERSION for Linux $ARCH"
+BASENAME="keptcraft-$VERSION-linux-$ARCH"
+echo "==> KeptCraft $VERSION for Linux $ARCH"
 
 # Link with the LLD that ships with rustc, as x86_64 already does by default. GNU ld marks the GLIBC_2.39
 # version of std's weak pidfd functions as required, so the binary would not start on older glibc.
@@ -41,7 +41,7 @@ if [ "$SKIP_BUILD" = 0 ]; then
     host="$(rustc -vV | sed -n 's/^host: //p')"
     sysroot="$(rustc --print sysroot)"
     export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-fuse-ld=lld -C link-arg=-B$sysroot/lib/rustlib/$host/bin/gcc-ld"
-    cargo build --release --locked -p shotcraft4kept
+    cargo build --release --locked -p keptcraft
   )
 fi
 WORK="$CARGO_TARGET_DIR/linux-package"
@@ -49,23 +49,23 @@ STAGE="$WORK/root"
 rm -rf "$WORK"
 
 # ---- the installed file tree, shared by every format ---------------------------------------------
-install -Dm755 "$CARGO_TARGET_DIR/release/shotcraft4kept" "$STAGE/usr/bin/shotcraft4kept"
-strip "$STAGE/usr/bin/shotcraft4kept"
+install -Dm755 "$CARGO_TARGET_DIR/release/keptcraft" "$STAGE/usr/bin/keptcraft"
+strip "$STAGE/usr/bin/keptcraft"
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.metainfo.xml" "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
-install -Dm644 "$ROOT/assets/app-icon/shotcraft4kept.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
+install -Dm644 "$ROOT/assets/app-icon/keptcraft.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
-mkdir -p "$STAGE/usr/share/doc/shotcraft4kept"
-copy_docs "$STAGE/usr/share/doc/shotcraft4kept"
-"$STAGE/usr/bin/shotcraft4kept" --version
+mkdir -p "$STAGE/usr/share/doc/keptcraft"
+copy_docs "$STAGE/usr/share/doc/keptcraft"
+"$STAGE/usr/bin/keptcraft" --version
 
 # The newest glibc symbol version the binary requires. Weak references don't count: Rust's standard
 # library links newer functions weakly and checks for them at run time.
 GLIBC_MIN=2.35
-glibc="$(readelf -V "$STAGE/usr/bin/shotcraft4kept" | sed -nE 's/.*Name: GLIBC_([0-9.]+) +Flags: none.*/\1/p' | sort -V | tail -1)"
+glibc="$(readelf -V "$STAGE/usr/bin/keptcraft" | sed -nE 's/.*Name: GLIBC_([0-9.]+) +Flags: none.*/\1/p' | sort -V | tail -1)"
 if [ "$(printf '%s\n%s\n' "$glibc" "$GLIBC_MIN" | sort -V | tail -1)" != "$GLIBC_MIN" ]; then
   echo "error: the binary needs glibc $glibc, newer than the $GLIBC_MIN the packages promise:" >&2
-  objdump -T "$STAGE/usr/bin/shotcraft4kept" | grep -F "(GLIBC_$glibc)" >&2
+  objdump -T "$STAGE/usr/bin/keptcraft" | grep -F "(GLIBC_$glibc)" >&2
   exit 1
 fi
 echo "needs glibc $glibc or newer"
@@ -85,10 +85,10 @@ for fmt in deb rpm; do
 done
 
 # ---- AppImage -------------------------------------------------------------------------------------
-APPDIR="$WORK/ShotCraft4Kept.AppDir"
+APPDIR="$WORK/KeptCraft.AppDir"
 cp -R "$STAGE" "$APPDIR"
 rm -rf "$APPDIR/usr/share/doc"
-ln -s usr/bin/shotcraft4kept "$APPDIR/AppRun"
+ln -s usr/bin/keptcraft "$APPDIR/AppRun"
 cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
 cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
 ln -s "$APP_ID.png" "$APPDIR/.DirIcon"

@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata for software centres and Flathub. -->
 <component type="desktop-application">
-  <id>io.github.jamesbuckley-source.shotcraft4kept</id>
+  <id>io.github.jamesbuckley-source.keptcraft</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>ShotCraft4Kept</name>
+  <name>KeptCraft</name>
   <summary>Capture, annotate, redact and share screenshots</summary>
-  <developer id="io.github.mmartinez">
-    <name>The ShotCraft4Kept contributors</name>
+  <developer id="io.github.jamesbuckley-source">
+    <name>The KeptCraft contributors</name>
   </developer>
   <description>
     <p>
-      ShotCraft4Kept captures an area, a window, the whole screen or a scrolling page,
+      KeptCraft captures an area, a window, the whole screen or a scrolling page,
       then lets you annotate, redact and share the result.
     </p>
     <ul>
@@ -23,10 +23,10 @@
       <li>Every capture mode is a command you can bind to a keyboard shortcut</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.jamesbuckley-source.shotcraft4kept.desktop</launchable>
-  <icon type="stock">io.github.jamesbuckley-source.shotcraft4kept</icon>
-  <url type="homepage">https://github.com/jamesbuckley-source/shotcraft4kept</url>
-  <url type="bugtracker">https://github.com/jamesbuckley-source/shotcraft4kept/issues</url>
+  <launchable type="desktop-id">io.github.jamesbuckley-source.keptcraft.desktop</launchable>
+  <icon type="stock">io.github.jamesbuckley-source.keptcraft</icon>
+  <url type="homepage">https://github.com/jamesbuckley-source/KeptCraft</url>
+  <url type="bugtracker">https://github.com/jamesbuckley-source/KeptCraft/issues</url>
   <categories>
     <category>Graphics</category>
   </categories>
@@ -37,8 +37,8 @@
     <keyword>OCR</keyword>
   </keywords>
   <branding>
-    <color type="primary" scheme_preference="light">#8cc8ff</color>
-    <color type="primary" scheme_preference="dark">#2d3ab8</color>
+    <color type="primary" scheme_preference="light">#2b3040</color>
+    <color type="primary" scheme_preference="dark">#13151e</color>
   </branding>
   <requires>
     <display_length compare="ge">760</display_length>
@@ -48,7 +48,7 @@
     <control>pointing</control>
   </supports>
   <provides>
-    <binary>shotcraft4kept</binary>
+    <binary>keptcraft</binary>
   </provides>
   <content_rating type="oars-1.1"/>
 </component>

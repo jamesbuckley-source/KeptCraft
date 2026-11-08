@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build ShotCraft4Kept for Apple silicon and Intel and package it as one app:
+# Build KeptCraft for Apple silicon and Intel and package it as one app:
 #
-#   $DIST/shotcraft4kept-<version>-macos-universal.dmg  ShotCraft4Kept.app on a drag-to-Applications disk image
+#   $DIST/keptcraft-<version>-macos-universal.dmg  KeptCraft.app on a drag-to-Applications disk image
 #
 # Usage: packaging/macos/package.sh [--skip-build]
 #
@@ -11,7 +11,7 @@ set -euo pipefail
 # shellcheck source=packaging/env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
-APP_ID=io.github.jamesbuckley-source.shotcraft4kept
+APP_ID=io.github.jamesbuckley-source.keptcraft
 TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
 SKIP_BUILD=0
@@ -24,22 +24,22 @@ esac
 # Keep in sync with LSMinimumSystemVersion in Info.plist.in.
 export MACOSX_DEPLOYMENT_TARGET=11.0
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/ShotCraft4Kept.app"
-DMG="$DIST/shotcraft4kept-$VERSION-macos-universal.dmg"
-echo "==> ShotCraft4Kept $VERSION for macOS (universal)"
+APP="$WORK/KeptCraft.app"
+DMG="$DIST/keptcraft-$VERSION-macos-universal.dmg"
+echo "==> KeptCraft $VERSION for macOS (universal)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p shotcraft4kept --target "${TARGETS[0]}" --target "${TARGETS[1]}")
+  (cd "$ROOT" && cargo build --release --locked -p keptcraft --target "${TARGETS[0]}" --target "${TARGETS[1]}")
 fi
 rm -rf "$WORK"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses"
 
-# ---- ShotCraft4Kept.app --------------------------------------------------------------------------------
-lipo -create -output "$APP/Contents/MacOS/ShotCraft4Kept" \
-  "$CARGO_TARGET_DIR/${TARGETS[0]}/release/shotcraft4kept" "$CARGO_TARGET_DIR/${TARGETS[1]}/release/shotcraft4kept"
-lipo "$APP/Contents/MacOS/ShotCraft4Kept" -verify_arch arm64 x86_64
+# ---- KeptCraft.app --------------------------------------------------------------------------------
+lipo -create -output "$APP/Contents/MacOS/KeptCraft" \
+  "$CARGO_TARGET_DIR/${TARGETS[0]}/release/keptcraft" "$CARGO_TARGET_DIR/${TARGETS[1]}/release/keptcraft"
+lipo "$APP/Contents/MacOS/KeptCraft" -verify_arch arm64 x86_64
 # The icon set from the hicolor PNGs; iconutil leaves out the sizes that have no file.
-ICONSET="$WORK/ShotCraft4Kept.iconset"
+ICONSET="$WORK/KeptCraft.iconset"
 mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
   cp "$ROOT/assets/app-icon/hicolor/${s}x${s}/apps/$APP_ID.png" "$ICONSET/icon_${s}x${s}.png"
@@ -47,7 +47,7 @@ for s in 16 32 128 256 512; do
     cp "$ROOT/assets/app-icon/hicolor/$((s * 2))x$((s * 2))/apps/$APP_ID.png" "$ICONSET/icon_${s}x${s}@2x.png"
   fi
 done
-iconutil -c icns -o "$APP/Contents/Resources/ShotCraft4Kept.icns" "$ICONSET"
+iconutil -c icns -o "$APP/Contents/Resources/KeptCraft.icns" "$ICONSET"
 
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/${VERSION%%-*}/g" "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
@@ -56,20 +56,20 @@ copy_docs "$APP/Contents/Resources/Licenses"
 
 # Ad hoc: Apple silicon runs only signed code, and a bundle signature gives macOS a stable identity
 # for the Screen Recording permission. Sign the executable, then the bundle.
-codesign --force --sign - --identifier "$APP_ID" "$APP/Contents/MacOS/ShotCraft4Kept"
+codesign --force --sign - --identifier "$APP_ID" "$APP/Contents/MacOS/KeptCraft"
 codesign --force --sign - --identifier "$APP_ID" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
-"$APP/Contents/MacOS/ShotCraft4Kept" --version
+"$APP/Contents/MacOS/KeptCraft" --version
 
 # ---- DMG ------------------------------------------------------------------------------------------
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/ShotCraft4Kept.app"
+ditto "$APP" "$STAGE/KeptCraft.app"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 # makehybrid and convert build the image without attaching a device, which `hdiutil create
 # -srcfolder` needs and which fails intermittently on CI runners ("Resource busy").
-hdiutil makehybrid -hfs -hfs-volume-name "ShotCraft4Kept" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
+hdiutil makehybrid -hfs -hfs-volume-name "KeptCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
 hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
 rm -f "$WORK/raw.dmg"
 hdiutil verify "$DMG"

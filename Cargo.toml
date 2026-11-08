@@ -3,19 +3,19 @@ resolver = "3"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jamesbuckley-source/shotcraft4kept"
+repository = "https://github.com/jamesbuckley-source/KeptCraft"
 rust-version = "1.95"
 # Distributed as an app, not on crates.io (the UI crate embeds the icon from assets/).
 publish = false
 
 [workspace.dependencies]
 # internal
-shotcraft-doc = { path = "crates/doc" }
-shotcraft-engine = { path = "crates/engine" }
-shotcraft-ui-egui = { path = "crates/ui-egui" }
+keptcraft-doc = { path = "crates/doc" }
+keptcraft-engine = { path = "crates/engine" }
+keptcraft-ui-egui = { path = "crates/ui-egui" }
 
 # external
 anyhow = "1"
@@ -45,6 +45,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # ocrs disables rten's default features; the published ocrs models are ONNX files.
 rten = { version = "0.26", default-features = false, features = ["onnx_format"] }
 schemars = "1"
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 skrifa = "0.48"

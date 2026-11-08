@@ -1,6 +1,6 @@
 [package]
-name = "shotcraft-ui-egui"
-description = "egui windows for ShotCraft: capture overlay, editor, Quick Access, pin, history, settings."
+name = "keptcraft-ui-egui"
+description = "egui windows for KeptCraft: capture overlay, editor, Quick Access, pin, history, settings."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-shotcraft-engine = { workspace = true }
+keptcraft-engine = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 eframe = { workspace = true }

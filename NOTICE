@@ -1,6 +1,13 @@
-ShotCraft
-Copyright (c) 2026 the ShotCraft contributors.
+KeptCraft
+Copyright (c) 2026 the KeptCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option (LICENSE-MIT, LICENSE-APACHE).
+
+KeptCraft is a fork of ShotCraft, and most of its code is ShotCraft's:
+
+ShotCraft <https://github.com/mmartinez/shotcraft>
+Copyright (c) 2026 the ShotCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option (see LICENSE-MIT and
+LICENSE-APACHE, which carry both notices).
 
 Third-party material
 

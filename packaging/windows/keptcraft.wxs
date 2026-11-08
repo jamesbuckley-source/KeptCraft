@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  ShotCraft4Kept MSI, built by package.ps1 with WiX Toolset v5 (the `wix` dotnet tool, version 5.0.2).
+  KeptCraft MSI, built by package.ps1 with WiX Toolset v5 (the `wix` dotnet tool, version 5.0.2).
   (No double hyphens in this comment: XML forbids them, so the install command is in package.ps1.)
 
-    wix build shotcraft4kept.wxs -arch x64 -d Version=0.1.0 -d BinDir=... -d DocDir=... -d IconPath=... -o out.msi
+    wix build keptcraft.wxs -arch x64 -d Version=0.1.0 -d BinDir=... -d DocDir=... -d IconPath=... -o out.msi
 
-  Per-machine install into Program Files\ShotCraft4Kept with a Start Menu shortcut, which starts the
+  Per-machine install into Program Files\KeptCraft with a Start Menu shortcut, which starts the
   tray icon and global shortcuts. No setup wizard: Windows Installer shows only its progress
   dialog, and `msiexec /qn` installs silently.
 
@@ -13,31 +13,31 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-      Name="ShotCraft4Kept"
-      Manufacturer="The ShotCraft4Kept contributors"
+      Name="KeptCraft"
+      Manufacturer="The KeptCraft contributors"
       Version="$(var.Version)"
       UpgradeCode="14234891-162C-4CCA-B023-2A755F520787"
       Scope="perMachine"
       Compressed="yes"
       Language="1033">
-    <SummaryInformation Description="ShotCraft4Kept screenshot tool" Manufacturer="The ShotCraft4Kept contributors" />
+    <SummaryInformation Description="KeptCraft screenshot tool" Manufacturer="The KeptCraft contributors" />
     <!-- MSI versions are numeric, so 0.1.0-beta.1 and 0.1.0-beta.2 are both 0.1.0: allow same-version
          upgrades so successive pre-releases replace each other. -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of ShotCraft4Kept is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of KeptCraft is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Advertised shortcuts need an icon Id ending in .exe (ICE50), even for an .ico source. -->
-    <Icon Id="ShotCraft4KeptIcon.exe" SourceFile="$(var.IconPath)" />
-    <Property Id="ARPPRODUCTICON" Value="ShotCraft4KeptIcon.exe" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jamesbuckley-source/shotcraft4kept" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/jamesbuckley-source/shotcraft4kept/issues" />
+    <Icon Id="KeptCraftIcon.exe" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="KeptCraftIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jamesbuckley-source/KeptCraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/jamesbuckley-source/KeptCraft/issues" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="ShotCraft4Kept" />
+      <Directory Id="INSTALLFOLDER" Name="KeptCraft" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
 
-    <Feature Id="Main" Title="ShotCraft4Kept">
+    <Feature Id="Main" Title="KeptCraft">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentGroupRef Id="LicenseFiles" />
     </Feature>
@@ -46,10 +46,10 @@
   <Fragment>
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component>
-        <File Id="ShotCraft4KeptExe" Source="$(var.BinDir)\shotcraft4kept.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="ShotCraft4Kept"
+        <File Id="KeptCraftExe" Source="$(var.BinDir)\keptcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="KeptCraft"
               Description="Capture, annotate, redact and share screenshots" WorkingDirectory="INSTALLFOLDER"
-              Advertise="yes" Icon="ShotCraft4KeptIcon.exe" IconIndex="0" />
+              Advertise="yes" Icon="KeptCraftIcon.exe" IconIndex="0" />
         </File>
       </Component>
     </ComponentGroup>

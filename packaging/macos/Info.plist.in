@@ -7,13 +7,13 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>ShotCraft4Kept</string>
+  <string>KeptCraft</string>
   <key>CFBundleName</key>
-  <string>ShotCraft4Kept</string>
+  <string>KeptCraft</string>
   <key>CFBundleExecutable</key>
-  <string>ShotCraft4Kept</string>
+  <string>KeptCraft</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.jamesbuckley-source.shotcraft4kept</string>
+  <string>io.github.jamesbuckley-source.keptcraft</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -25,9 +25,9 @@
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
   <key>CFBundleGetInfoString</key>
-  <string>ShotCraft4Kept @VERSION@</string>
+  <string>KeptCraft @VERSION@</string>
   <key>CFBundleIconFile</key>
-  <string>ShotCraft4Kept</string>
+  <string>KeptCraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. -->
@@ -36,6 +36,6 @@
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright the ShotCraft4Kept contributors. MIT OR Apache-2.0.</string>
+  <string>Copyright the KeptCraft contributors. MIT OR Apache-2.0.</string>
 </dict>
 </plist>

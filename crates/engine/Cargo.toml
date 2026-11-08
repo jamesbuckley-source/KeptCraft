@@ -1,6 +1,6 @@
 [package]
-name = "shotcraft-engine"
-description = "Screen capture, settings, history, OCR, clipboard, saving and uploading for ShotCraft."
+name = "keptcraft-engine"
+description = "Screen capture, settings, history, OCR, clipboard, saving and uploading for KeptCraft."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-shotcraft-doc = { workspace = true }
+keptcraft-doc = { workspace = true }
 arboard = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
@@ -24,6 +24,7 @@ rqrr = { workspace = true }
 rusqlite = { workspace = true }
 rten = { workspace = true }
 schemars = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

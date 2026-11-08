@@ -1,5 +1,5 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-//! ShotCraft4Kept: screenshot tool for Kept, built on ShotCraft.
+//! KeptCraft: screenshot tool for Kept, built on KeptCraft.
 //! Every capture mode is a subcommand, so any of them can be bound to an OS shortcut.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -11,16 +11,16 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use shotcraft_engine::config::{self, LastArea, Settings, State, WindowCaptureStyle};
-use shotcraft_engine::doc::effects::IRect;
-use shotcraft_engine::doc::model::{Background, BgFill, Doc};
-use shotcraft_engine::{capture, history, ocr, share};
-use shotcraft_ui_egui::overlay::{self, Mode, Outcome};
-use shotcraft_ui_egui::pin::{self, ImageSource};
-use shotcraft_ui_egui::{dialogs, editor, history_view, notify, quick, scrolling, settings_view};
+use keptcraft_engine::config::{self, LastArea, Settings, State, WindowCaptureStyle};
+use keptcraft_engine::doc::effects::IRect;
+use keptcraft_engine::doc::model::{Background, BgFill, Doc};
+use keptcraft_engine::{capture, history, ocr, share};
+use keptcraft_ui_egui::overlay::{self, Mode, Outcome};
+use keptcraft_ui_egui::pin::{self, ImageSource};
+use keptcraft_ui_egui::{dialogs, editor, history_view, notify, quick, scrolling, settings_view};
 
 #[derive(Parser)]
-#[command(name = "shotcraft4kept", version, about = "Capture, annotate, redact and share screenshots, with Kept.")]
+#[command(name = "keptcraft", version, about = "Capture, annotate, redact and share screenshots, with Kept.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -118,7 +118,7 @@ enum Cmd {
         #[arg(long)]
         linebreaks: Option<bool>,
     },
-    /// Open an image or .shotcraft project in the editor.
+    /// Open an image or .keptcraft project in the editor.
     OpenAnnotate {
         #[arg(long)]
         filepath: Option<PathBuf>,
@@ -151,7 +151,7 @@ enum Cmd {
     Notify {
         #[arg(long)]
         title: String,
-        /// Defaults to `SHOTCRAFT_NOTIFY_BODY`, which is how the app passes it.
+        /// Defaults to `KEPTCRAFT_NOTIFY_BODY`, which is how the app passes it.
         #[arg(long)]
         body: Option<String>,
         #[arg(long)]
@@ -185,7 +185,7 @@ fn main() {
     let result =
         std::panic::catch_unwind(AssertUnwindSafe(|| dispatch(cmd))).unwrap_or_else(|panic| Err(anyhow!("internal error: {}", panic_message(&*panic))));
     if let Err(err) = result {
-        eprintln!("shotcraft4kept: {err:#}");
+        eprintln!("keptcraft: {err:#}");
         if toast_on_error {
             share::warn("Something went wrong", &format!("{err:#}"));
         }
@@ -428,7 +428,7 @@ mod tests {
     use clap::CommandFactory;
 
     pub(crate) fn parse<S: Into<String>>(args: impl IntoIterator<Item = S>) -> Option<Cmd> {
-        Cli::try_parse_from(std::iter::once("shotcraft".to_owned()).chain(args.into_iter().map(Into::into))).ok()?.cmd
+        Cli::try_parse_from(std::iter::once("keptcraft".to_owned()).chain(args.into_iter().map(Into::into))).ok()?.cmd
     }
 
     #[test]

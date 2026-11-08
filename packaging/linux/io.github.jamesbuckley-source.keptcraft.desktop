@@ -1,48 +1,48 @@
 [Desktop Entry]
 Type=Application
-Name=ShotCraft4Kept
+Name=KeptCraft
 GenericName=Screenshot Tool
 Comment=Capture, annotate, redact and share screenshots
-# Without a subcommand ShotCraft4Kept starts its tray icon and global shortcuts.
-Exec=shotcraft4kept
-TryExec=shotcraft4kept
-Icon=io.github.jamesbuckley-source.shotcraft4kept
+# Without a subcommand KeptCraft starts its tray icon and global shortcuts.
+Exec=keptcraft
+TryExec=keptcraft
+Icon=io.github.jamesbuckley-source.keptcraft
 Terminal=false
 # The tray process maps no window, so a startup-notification cursor would spin until it times out.
 StartupNotify=false
-StartupWMClass=io.github.jamesbuckley-source.shotcraft4kept
+StartupWMClass=io.github.jamesbuckley-source.keptcraft
 Categories=Graphics;
 Keywords=screenshot;screen capture;screengrab;annotate;redact;OCR;scrolling capture;
 Actions=all-in-one;capture-area;capture-window;capture-fullscreen;scrolling-capture;capture-text;open-history;open-settings;
 
 [Desktop Action all-in-one]
 Name=All-In-One
-Exec=shotcraft4kept all-in-one
+Exec=keptcraft all-in-one
 
 [Desktop Action capture-area]
 Name=Capture Area
-Exec=shotcraft4kept capture-area
+Exec=keptcraft capture-area
 
 [Desktop Action capture-window]
 Name=Capture Window
-Exec=shotcraft4kept capture-window
+Exec=keptcraft capture-window
 
 [Desktop Action capture-fullscreen]
 Name=Capture Fullscreen
-Exec=shotcraft4kept capture-fullscreen
+Exec=keptcraft capture-fullscreen
 
 [Desktop Action scrolling-capture]
 Name=Scrolling Capture
-Exec=shotcraft4kept scrolling-capture
+Exec=keptcraft scrolling-capture
 
 [Desktop Action capture-text]
 Name=Capture Text
-Exec=shotcraft4kept capture-text
+Exec=keptcraft capture-text
 
 [Desktop Action open-history]
 Name=Capture History
-Exec=shotcraft4kept open-history
+Exec=keptcraft open-history
 
 [Desktop Action open-settings]
 Name=Settings
-Exec=shotcraft4kept open-settings
+Exec=keptcraft open-settings

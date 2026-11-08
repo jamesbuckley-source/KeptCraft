@@ -1,5 +1,5 @@
 [package]
-name = "shotcraft-doc"
+name = "keptcraft-doc"
 description = "Screenshot document model, tiny-skia rendering, pixel effects and scrolling-capture stitching."
 version.workspace = true
 edition.workspace = true

@@ -19,7 +19,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Image(#[from] image::ImageError),
-    #[error("not a ShotCraft project")]
+    #[error("not a KeptCraft project")]
     NotAProject,
     #[error("project version {0} is newer than this app")]
     TooNew(u32),
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_the_target_and_leaves_no_temp_files() {
-        let dir = std::env::temp_dir().join(format!("shotcraft-atomic-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keptcraft-atomic-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.json");
         std::fs::write(&path, b"old").unwrap();

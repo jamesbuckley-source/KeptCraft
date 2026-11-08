@@ -13,10 +13,10 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::capture::{self, MonitorShot, WinInfo};
-use shotcraft_engine::config::Settings;
-use shotcraft_engine::doc::effects::IRect;
-use shotcraft_engine::doc::model::constrain_aspect;
+use keptcraft_engine::capture::{self, MonitorShot, WinInfo};
+use keptcraft_engine::config::Settings;
+use keptcraft_engine::doc::effects::IRect;
+use keptcraft_engine::doc::model::constrain_aspect;
 
 use crate::{platform, theme};
 
@@ -142,13 +142,10 @@ pub fn run(mode: Mode, preset: Option<Preset>) -> anyhow::Result<Option<Outcome>
         finished: false,
         monitors,
     };
-    let options = eframe::NativeOptions {
-        viewport: monitor_builder(&app.monitors[root], "ShotCraft4Kept capture"),
-        renderer: eframe::Renderer::Glow,
-        ..Default::default()
-    };
+    let options =
+        eframe::NativeOptions { viewport: monitor_builder(&app.monitors[root], "KeptCraft capture"), renderer: eframe::Renderer::Glow, ..Default::default() };
     eframe::run_native(
-        "shotcraft-overlay",
+        "keptcraft-overlay",
         options,
         Box::new(|cc| {
             theme::setup(&cc.egui_ctx);
@@ -172,7 +169,7 @@ impl eframe::App for OverlayApp {
             if i == self.root {
                 continue;
             }
-            let builder = monitor_builder(&self.monitors[i], "ShotCraft4Kept capture");
+            let builder = monitor_builder(&self.monitors[i], "KeptCraft capture");
             ctx.show_viewport_immediate(ViewportId::from_hash_of(("monitor", i)), builder, |ui, _| self.monitor_ui(ui, i));
         }
         if self.finished {

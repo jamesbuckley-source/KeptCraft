@@ -1,22 +1,22 @@
 # Security Policy
 
-ShotCraft4Kept reads the screen, the clipboard, image files and `.shotcraft4kept` projects, and can upload captures to an endpoint you configure.
+KeptCraft reads the screen, the clipboard, image files and `.keptcraft` projects, and can upload captures to an endpoint you configure.
 Treat image files, project files, clipboard contents, command-line arguments and upload responses as untrusted input.
 
 ## Supported versions
 
 Fixes land on `main`; once releases exist, only the latest release receives security fixes.
-ShotCraft4Kept is pre-1.0, so a fix ships in a new release rather than as a backport.
+KeptCraft is pre-1.0, so a fix ships in a new release rather than as a backport.
 
 ## Reporting a vulnerability
 
-Report privately through GitHub's private vulnerability reporting: <https://github.com/jamesbuckley-source/shotcraft4kept/security/advisories/new>.
+Report privately through GitHub's private vulnerability reporting: <https://github.com/jamesbuckley-source/KeptCraft/security/advisories/new>.
 Do not open a public issue, discussion or pull request containing a working exploit, a secret or a malicious file.
 Please allow time for a fix before publishing details.
 
 ## What to include
 
-- The ShotCraft4Kept version or commit, and how you installed it.
+- The KeptCraft version or commit, and how you installed it.
 - Operating system, desktop environment or window system (X11, Wayland, Windows, macOS) and display scaling.
 - The command or action that triggers the problem, with exact reproduction steps.
 - Expected and actual behaviour, plus any crash output or logs.
@@ -27,13 +27,14 @@ If a malicious file is needed to reproduce the problem, first describe its forma
 
 ## Scope
 
-- Decoding images and `.shotcraft4kept` projects (JSON with an embedded PNG), including oversized dimensions, decompression bombs and hangs.
+- Decoding images and `.keptcraft` projects (JSON with an embedded PNG), including oversized dimensions, decompression bombs and hangs.
 - Clipboard reads and writes, and drag and drop into other applications.
 - Uploads: the request built from your settings, and parsing of the response.
 - Downloading the OCR models.
+- The updater: the GitHub releases API response, the installer it downloads, and how the download path is built. The response is untrusted input, the download is capped, and the file is written to the data folder before the platform installer is started.
 - File paths for saving, history and project files, including overwrites and symlinks.
 - Launching modes as child processes and parsing command-line arguments.
-- The MCP server (`shotcraft4kept mcp`): tool arguments from an agent are untrusted input, and history ids must never reach files outside the history folder.
+- The MCP server (`keptcraft mcp`): tool arguments from an agent are untrusted input, and history ids must never reach files outside the history folder.
 - Dependencies, CI, packaging and release artifacts.
 
 General bugs without a security impact belong in the normal issue tracker.
@@ -41,10 +42,10 @@ General bugs without a security impact belong in the normal issue tracker.
 ## Current limitations
 
 - Upload settings, including any authorization headers, are stored in plain text in the settings file in your user configuration folder.
-  On Linux and macOS ShotCraft4Kept makes its configuration and data folders readable only by your user account.
+  On Linux and macOS KeptCraft makes its configuration and data folders readable only by your user account.
 - Capture history (screenshots, projects, and copies staged for drag and drop) is stored unencrypted in your user data folder.
   An entry stays until you delete it or it expires; expired entries are removed the next time you capture or open the history.
-- Redaction and cropping are edits: a `.shotcraft4kept` project, including the one kept with each history entry, still contains the original, unredacted capture.
+- Redaction and cropping are edits: a `.keptcraft` project, including the one kept with each history entry, still contains the original, unredacted capture.
   Share exported images, not project files.
-- An agent connected through `shotcraft4kept mcp` can capture anything on your screens, read it, and upload captures to the endpoint you configured.
+- An agent connected through `keptcraft mcp` can capture anything on your screens, read it, and upload captures to the endpoint you configured.
   Your agent's per-tool approval is the only gate, so approve `capture_*` and `upload_capture` deliberately.

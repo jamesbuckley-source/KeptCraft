@@ -246,7 +246,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
     let scale = capture::primary_scale();
     let natural = vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0);
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
-    let size = natural.max(vec2(1260.0, 720.0)).min(screen.size() * 0.88);
+    let size = natural.max(vec2(1300.0, 740.0)).min(screen.size() * 0.88);
     let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
     let title = match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
@@ -1012,14 +1012,18 @@ impl Editor {
                     }
                 });
                 ui.separator();
-                let mut commentary = self.show_commentary;
-                if ui.checkbox(&mut commentary, "Commentary").on_hover_text("The steps' comments, in the panel on the right").changed() {
+                // A button rather than a checkbox: the same switch in half the width.
+                if ui
+                    .add(egui::Button::selectable(self.show_commentary, "Commentary"))
+                    .on_hover_text("Show the comment panel: one box per step, drawn beside the image")
+                    .clicked()
+                {
                     self.toggle_commentary();
                 }
-                ui.separator();
                 // The cluster is the last thing added to the row, so it only draws when the tools
                 // and the actions above have left room for it.
-                if ui.available_width() > 120.0 {
+                if ui.available_width() > 132.0 {
+                    ui.separator();
                     self.zoom_control(ui);
                 }
             });
@@ -1035,7 +1039,7 @@ impl Editor {
             }
             let mut zoom = self.zoom;
             let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
-            if ui.add_sized([44.0, 16.0], slider).on_hover_text("Zoom").changed() {
+            if ui.add_sized([36.0, 16.0], slider).on_hover_text("Zoom").changed() {
                 self.zoom_to(zoom, None);
             }
             if tiny_button(ui, icon::PLUS, "Zoom in") {
@@ -2522,12 +2526,12 @@ fn zoomed_pan(pan: Vec2, centre: Pos2, anchor: Pos2, factor: f32) -> Vec2 {
 
 /// A small square icon button for the zoom cluster.
 fn tiny_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     let colour = ui.visuals().widgets.inactive.fg_stroke.color;
     if resp.hovered() {
         ui.painter().rect_filled(rect, 5, ui.visuals().widgets.hovered.weak_bg_fill);
     }
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(12.5), colour);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(11.5), colour);
     resp.on_hover_text(tip).clicked()
 }
 

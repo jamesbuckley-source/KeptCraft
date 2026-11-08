@@ -165,6 +165,8 @@ struct Editor {
     arrow_style: ArrowStyle,
     text_style: TextStyle,
     text_size: f32,
+    /// New text wraps at the image's right edge instead of running off it.
+    text_paragraph: bool,
     redact_mode: RedactMode,
     spotlight_ellipse: bool,
     selected: Option<usize>,
@@ -228,6 +230,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         arrow_style: ArrowStyle::Tapered,
         text_style: TextStyle::Plain,
         text_size: 32.0,
+        text_paragraph: false,
         redact_mode: RedactMode::Pixelate,
         spotlight_ellipse: false,
         selected: None,
@@ -1070,6 +1073,23 @@ impl Editor {
                         }
                     });
                 }
+                // Single line never wraps; a paragraph wraps at the right edge of the image.
+                let layout = if self.text_paragraph { "Paragraph" } else { "Single line" };
+                egui::ComboBox::from_id_salt("text-layout").selected_text(layout).width(110.0).show_ui(ui, |ui| {
+                    for paragraph in [false, true] {
+                        let label = if paragraph { "Paragraph" } else { "Single line" };
+                        if ui.selectable_label(self.text_paragraph == paragraph, label).clicked() {
+                            self.text_paragraph = paragraph;
+                            let base = self.doc.base.width() as f32;
+                            let size = self.text_size;
+                            self.restyle_selected(|it| {
+                                if let Shape::Text { pos, wrap, .. } = &mut it.shape {
+                                    *wrap = paragraph.then(|| (base - pos.x).max(size * 4.0));
+                                }
+                            });
+                        }
+                    }
+                });
             }
             Tool::Redact => {
                 let modes = [
@@ -1205,6 +1225,20 @@ impl Editor {
                     ui.end_row();
                 }
             }
+            // Build a gradient of your own: the same size as the samples beside it.
+            let (r, plus) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
+            ui.painter().rect_stroke(r, 10, Stroke::new(1.5, ui.visuals().widgets.inactive.fg_stroke.color), StrokeKind::Inside);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(20.0), ui.visuals().widgets.inactive.fg_stroke.color);
+            if plus.on_hover_text("Build a gradient").clicked() {
+                self.gradient_draft = Some(OwnedGradient {
+                    angle: 135.0,
+                    stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
+                });
+            }
+            tiles += 1;
+            if tiles % 4 == 0 {
+                ui.end_row();
+            }
         });
         if let Some(i) = remove_gradient {
             let had_it =
@@ -1245,15 +1279,13 @@ impl Editor {
                     self.set_fill(BgFill::Solid(col));
                 }
             }
-            // Build a gradient of your own; the tiles above and below it are the built-in ones.
-            let (r, plus) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-            ui.painter().rect_stroke(r, 6, Stroke::new(1.5, ui.visuals().widgets.inactive.fg_stroke.color), StrokeKind::Inside);
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(14.0), ui.visuals().widgets.inactive.fg_stroke.color);
-            if plus.on_hover_text("Build a gradient").clicked() {
-                self.gradient_draft = Some(OwnedGradient {
-                    angle: 135.0,
-                    stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
-                });
+            // A plain colour of your own: it lives in the background, so a preset keeps it too.
+            let mut custom = match &fill {
+                Some(BgFill::Solid(c)) => *c,
+                _ => Color32::WHITE,
+            };
+            if ui.color_edit_button_srgba(&mut custom).on_hover_text("Custom colour").changed() {
+                self.set_fill(BgFill::Solid(custom));
             }
         });
         ui.add_space(6.0);
@@ -1606,7 +1638,9 @@ impl Editor {
                             self.checkpoint();
                             let size = self.text_size;
                             let pos = b - vec2(0.0, size * 0.6);
-                            let item = self.new_item(Shape::Text { pos, text: String::new(), size, style: self.text_style });
+                            // A paragraph wraps at the image's right edge, so typing never runs off it.
+                            let wrap = self.text_paragraph.then(|| (self.doc.base.width() as f32 - pos.x).max(size * 4.0));
+                            let item = self.new_item(Shape::Text { pos, text: String::new(), size, style: self.text_style, wrap });
                             self.doc.items.push(item);
                             self.start_text_edit(self.doc.items.len() - 1);
                         }
@@ -1672,7 +1706,7 @@ impl Editor {
 
     fn text_editor(&mut self, ui: &mut egui::Ui) {
         let Some((i, mut text)) = self.editing.clone() else { return };
-        let Some(Item { shape: Shape::Text { pos, size, .. }, color, .. }) = self.doc.items.get(i).cloned() else {
+        let Some(Item { shape: Shape::Text { pos, size, wrap, .. }, color, .. }) = self.doc.items.get(i).cloned() else {
             self.editing = None;
             return;
         };
@@ -1680,6 +1714,9 @@ impl Editor {
         let at = view.to_screen(pos);
         let font = FontId::new(size * view.ppb(), FontFamily::Name(fonts::ANNOTATION_FAMILY.into()));
         let id = egui::Id::new("text-edit");
+        // A paragraph types inside its wrapping width, so the wrapping the export does is visible
+        // while the caret is there.
+        let width = wrap.map_or(f32::INFINITY, |w| (w * view.ppb()).max(40.0));
         let out = egui::Area::new(egui::Id::new("text-area")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
             let edit = egui::TextEdit::multiline(&mut text)
                 .id(id)
@@ -1687,7 +1724,7 @@ impl Editor {
                 .text_color(color)
                 .frame(egui::Frame::NONE)
                 .desired_rows(1)
-                .desired_width(f32::INFINITY)
+                .desired_width(width)
                 .margin(Vec2::ZERO);
             ui.add(edit)
         });
@@ -1709,6 +1746,13 @@ impl Editor {
         let full = self.doc.full_rect();
         let tol = 10.0 / view.ppb();
         let snap = 8.0 / view.ppb();
+        // A double click inside the box is the quick way to confirm the crop.
+        let double_clicked = resp.double_clicked()
+            && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| self.crop.as_ref().is_some_and(|c| c.rect.contains(view.to_base(p))));
+        if double_clicked {
+            self.apply_crop();
+            return;
+        }
         let Some(crop) = &mut self.crop else { return };
         let snap1 = |v: f32, lo: f32, hi: f32| {
             let v = v.clamp(lo, hi);

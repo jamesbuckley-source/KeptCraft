@@ -73,6 +73,40 @@ pub fn measure(text: &str, size: f32) -> Vec2 {
     layout(text, size).size
 }
 
+/// Height of one line at `size`, the step between wrapped lines.
+pub fn line_height(size: f32) -> f32 {
+    measure("Ag", size).y
+}
+
+/// Break `text` into lines no wider than `width`, keeping the line breaks the user typed. A word
+/// longer than the line gets a line of its own rather than being cut.
+pub fn wrap_lines(text: &str, size: f32, width: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut line_width = 0.0;
+        let mut wrote = false;
+        for word in paragraph.split(' ') {
+            let word_width = measure(word, size).x;
+            let space = if wrote { measure(" ", size).x } else { 0.0 };
+            if wrote && line_width + space + word_width > width {
+                out.push(std::mem::take(&mut line));
+                line.push_str(word);
+                line_width = word_width;
+            } else {
+                if wrote {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_width += space + word_width;
+            }
+            wrote = true;
+        }
+        out.push(line);
+    }
+    out
+}
+
 struct PathPen<'a> {
     pb: &'a mut tiny_skia::PathBuilder,
     dx: f32,
@@ -130,6 +164,17 @@ mod tests {
         let bounds = text_path("Hg", 32.0, origin).unwrap().bounds();
         assert!(bounds.left() >= origin.x - 1.0 && bounds.right() <= origin.x + size.x + 1.0);
         assert!(bounds.top() >= origin.y - 1.0 && bounds.bottom() <= origin.y + size.y + 1.0);
+    }
+
+    #[test]
+    fn wrapping_breaks_at_the_width_and_keeps_typed_breaks() {
+        let width = measure("one two three", 20.0).x / 2.0;
+        let lines = wrap_lines("one two three", 20.0, width);
+        assert!(lines.len() >= 2, "{lines:?}");
+        assert!(lines.iter().all(|line| measure(line, 20.0).x <= width + 1.0), "{lines:?}");
+        assert_eq!(wrap_lines("a\nb", 20.0, 1000.0), ["a", "b"]);
+        // A word wider than the line still gets a line of its own rather than being cut.
+        assert_eq!(wrap_lines("supercalifragilistic", 20.0, 10.0), ["supercalifragilistic"]);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use tiny_skia::{
 use crate::effects::{self, IRect};
 use crate::model::{
     ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, Watermark, arrow_head_len, curve_control,
-    curve_point, highlighter_width, text_padding,
+    curve_point, highlighter_width, text_padding, text_size,
 };
 use crate::{Error, Result, fonts};
 
@@ -292,7 +292,16 @@ fn draw_arrow(pm: &mut Pixmap, item: &Item, ts: Transform) {
     }
 }
 
-fn draw_text(pm: &mut Pixmap, pos: Pos2, text: &str, size: f32, style: TextStyle, color: Color32, ts: Transform) {
+/// What a text item draws, kept together so the drawing function stays readable.
+struct TextSpec<'a> {
+    text: &'a str,
+    size: f32,
+    style: TextStyle,
+    wrap: Option<f32>,
+}
+
+fn draw_text(pm: &mut Pixmap, pos: Pos2, spec: TextSpec<'_>, color: Color32, ts: Transform) {
+    let TextSpec { text, size, style, wrap } = spec;
     let pad = text_padding(size, style);
     if style.has_box() {
         let bg = match style {
@@ -300,32 +309,42 @@ fn draw_text(pm: &mut Pixmap, pos: Pos2, text: &str, size: f32, style: TextStyle
             TextStyle::Light => Color32::WHITE,
             _ => Color32::from_rgb(28, 28, 30),
         };
-        let r = Rect::from_min_size(pos, fonts::measure(text, size)).expand(pad);
+        let r = Rect::from_min_size(pos, text_size(text, size, wrap)).expand(pad);
         if let Some(path) = rounded_rect_path(r, size * 0.3) {
             pm.fill_path(&path, &paint(bg), FillRule::Winding, ts, None);
         }
     }
-    let Some(path) = fonts::text_path(text, size, pos) else { return };
+    // A paragraph draws one path per wrapped line; anything else draws its text in one path, and
+    // `fonts::layout` already steps over the newlines the user typed.
+    let lines: Vec<std::borrow::Cow<'_, str>> = match wrap {
+        Some(width) => fonts::wrap_lines(text, size, width.max(size)).into_iter().map(std::borrow::Cow::Owned).collect(),
+        None => vec![std::borrow::Cow::Borrowed(text)],
+    };
+    let step = fonts::line_height(size);
     let fill = match style {
         TextStyle::Filled => contrast_on(color),
         TextStyle::Dark if !is_light(color) => Color32::WHITE,
         _ => color,
     };
-    match style {
-        TextStyle::Outlined => {
-            pm.stroke_path(&path, &paint(contrast_on(color)), &stroke(size * 0.16), ts, None);
+    for (i, line) in lines.iter().enumerate() {
+        let at = pos + vec2(0.0, i as f32 * step);
+        let Some(path) = fonts::text_path(line, size, at) else { continue };
+        match style {
+            TextStyle::Outlined => {
+                pm.stroke_path(&path, &paint(contrast_on(color)), &stroke(size * 0.16), ts, None);
+            }
+            TextStyle::Shadow => {
+                let off = ts.pre_translate(size * 0.04, size * 0.07);
+                pm.fill_path(&path, &paint(Color32::from_black_alpha(120)), FillRule::Winding, off, None);
+            }
+            TextStyle::Stroke => {
+                pm.stroke_path(&path, &paint(color), &stroke(size * 0.06), ts, None);
+                continue;
+            }
+            _ => {}
         }
-        TextStyle::Shadow => {
-            let off = ts.pre_translate(size * 0.04, size * 0.07);
-            pm.fill_path(&path, &paint(Color32::from_black_alpha(120)), FillRule::Winding, off, None);
-        }
-        TextStyle::Stroke => {
-            pm.stroke_path(&path, &paint(color), &stroke(size * 0.06), ts, None);
-            return;
-        }
-        _ => {}
+        pm.fill_path(&path, &paint(fill), FillRule::Winding, ts, None);
     }
-    pm.fill_path(&path, &paint(fill), FillRule::Winding, ts, None);
 }
 
 fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) {
@@ -370,7 +389,7 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
                 pm.stroke_path(&path, &hp, &st, ts, None);
             }
         }
-        Shape::Text { pos, text, size, style } => draw_text(pm, *pos, text, *size, *style, item.color, ts),
+        Shape::Text { pos, text, size, style, wrap } => draw_text(pm, *pos, TextSpec { text, size: *size, style: *style, wrap: *wrap }, item.color, ts),
         Shape::Counter { center, n } => {
             let r = item.counter_radius();
             if let Some(path) = PathBuilder::from_circle(center.x, center.y, r) {
@@ -379,7 +398,7 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
             let label = n.to_string();
             let size = r * 1.15;
             let m = fonts::measure(&label, size);
-            draw_text(pm, *center - m * 0.5, &label, size, TextStyle::Plain, contrast_on(item.color), ts);
+            draw_text(pm, *center - m * 0.5, TextSpec { text: &label, size, style: TextStyle::Plain, wrap: None }, contrast_on(item.color), ts);
         }
         Shape::Redact { rect, mode, seed } => {
             let out = Rect::from_min_max(pos2(0.0, 0.0) + (rect.min - region.min) * s, pos2(0.0, 0.0) + (rect.max - region.min) * s);

@@ -90,6 +90,9 @@ pub enum Shape {
         text: String,
         size: f32,
         style: TextStyle,
+        /// Wrapping width for a paragraph; `None` keeps the line unbroken.
+        #[serde(default)]
+        wrap: Option<f32>,
     },
     Counter {
         center: Pos2,
@@ -144,7 +147,7 @@ impl Item {
                 let w = if matches!(self.shape, Shape::Highlighter { .. }) { highlighter_width(self.width) } else { self.width };
                 Rect::from_points(pts).expand(w * 0.5)
             }
-            Shape::Text { pos, text, size, style } => text_box(*pos, text, *size, *style),
+            Shape::Text { pos, text, size, style, wrap } => text_box(*pos, text, *size, *style, *wrap),
             Shape::Counter { center, .. } => Rect::from_center_size(*center, Vec2::splat(self.counter_radius() * 2.0)),
         }
     }
@@ -315,9 +318,22 @@ pub fn text_padding(size: f32, style: TextStyle) -> f32 {
 }
 
 /// Box covering a text item, including its background box when it has one.
-pub fn text_box(pos: Pos2, text: &str, size: f32, style: TextStyle) -> Rect {
-    let m = fonts::measure(text, size);
+pub fn text_box(pos: Pos2, text: &str, size: f32, style: TextStyle, wrap: Option<f32>) -> Rect {
+    let m = text_size(text, size, wrap);
     Rect::from_min_size(pos, m).expand(text_padding(size, style))
+}
+
+/// Size of a text block: one line when `wrap` is `None`, otherwise the widest wrapped line by the
+/// number of lines it broke into.
+pub fn text_size(text: &str, size: f32, wrap: Option<f32>) -> Vec2 {
+    match wrap {
+        Some(width) => {
+            let lines = fonts::wrap_lines(text, size, width.max(size));
+            let widest = lines.iter().map(|l| fonts::measure(l, size).x).fold(0.0, f32::max);
+            vec2(widest, lines.len().max(1) as f32 * fonts::line_height(size))
+        }
+        None => fonts::measure(text, size),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -654,9 +670,9 @@ impl Doc {
                     }
                 }
                 Shape::Pen { pts } | Shape::Highlighter { pts } => pts.iter_mut().for_each(|p| *p = map(*p)),
-                Shape::Text { pos, text, size, style } => {
+                Shape::Text { pos, text, size, style, wrap } => {
                     // Keep text upright: move its box, not its glyphs.
-                    let r = map_rect(text_box(*pos, text, *size, *style));
+                    let r = map_rect(text_box(*pos, text, *size, *style, *wrap));
                     *pos = r.min + Vec2::splat(text_padding(*size, *style));
                 }
                 Shape::Counter { center, .. } => *center = map(*center),
@@ -747,6 +763,15 @@ mod tests {
         let single = OwnedGradient { angle: 0.0, stops: vec![GradientStop { at: 0.0, color: [1, 2, 3, 255] }] };
         assert_eq!(single.sorted_stops().len(), 2);
         assert_eq!(single.color_at(0.7), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn a_paragraph_is_taller_and_narrower_than_one_line() {
+        let text = "the quick brown fox jumps over the lazy dog";
+        let one = text_size(text, 20.0, None);
+        let paragraph = text_size(text, 20.0, Some(140.0));
+        assert!(paragraph.y > one.y * 1.5, "{one:?} vs {paragraph:?}");
+        assert!(paragraph.x <= 140.0, "{paragraph:?}");
     }
 
     #[test]

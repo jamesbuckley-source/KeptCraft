@@ -70,6 +70,11 @@ const TILE_ROUNDING: u8 = 10;
 const THUMB_WIDTH: u32 = 420;
 /// Widest a tile gets, so three of them stay a column rather than filling a wide window.
 const TILE_MAX: f32 = 320.0;
+/// The picture beside a name in the File menu.
+const MENU_THUMB_W: f32 = 36.0;
+const MENU_THUMB_H: f32 = 23.0;
+/// Rows of Kept captures the start screen shows, and how many clips that is.
+const KEPT_ROWS: usize = 7;
 
 /// A start-screen thumbnail: the file it opens, the picture to show (Kept keeps its own small
 /// copy) and what the tooltip says.
@@ -419,6 +424,18 @@ fn tile_size(ui: &egui::Ui) -> (f32, f32) {
     (width, (width * TILE_SHAPE).round())
 }
 
+/// A menu row with a small picture of the file beside its name, or a plain row when the picture
+/// has not been decoded yet.
+fn thumb_button(ui: &mut egui::Ui, texture: Option<&TextureHandle>, text: impl Into<egui::WidgetText>) -> egui::Response {
+    match texture {
+        Some(texture) => {
+            let picture = egui::Image::new(texture).fit_to_exact_size(vec2(MENU_THUMB_W, MENU_THUMB_H));
+            ui.add(egui::Button::image_and_text(picture, text))
+        }
+        None => ui.button(text),
+    }
+}
+
 /// A tile's picture: the middle of the image at the tile's shape, so a tall capture fills the tile
 /// instead of shrinking to a sliver you cannot read.
 fn cover_thumb(path: &Path) -> Option<RgbaImage> {
@@ -588,12 +605,21 @@ impl Editor {
                     self.open_path(&ctx, path);
                 }
             }
+            if ui
+                .button(format!("{}  Open Recent Items Dashboard", icon::SQUARES_FOUR))
+                .on_hover_text("The thumbnails of your recent edits and Kept's captures")
+                .clicked()
+            {
+                ui.close();
+                self.show_dashboard(&ctx);
+            }
             ui.add_enabled_ui(has_recent, |ui| {
                 ui.menu_button(format!("{}  Recent Files", icon::CLOCK_COUNTER_CLOCKWISE), |ui| {
-                    ui.set_min_width(280.0);
+                    ui.set_min_width(300.0);
                     for path in self.recent.clone().into_iter().rev() {
                         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
-                        if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
+                        let thumb = self.thumb(ui.ctx(), &path);
+                        if thumb_button(ui, thumb.as_ref(), name).on_hover_text(path.display().to_string()).clicked() {
                             ui.close();
                             self.open_path(&ctx, path);
                         }
@@ -653,10 +679,12 @@ impl Editor {
                 return;
             }
         };
-        ui.menu_button(format!("{}  Open from Kept DB", icon::DATABASE), |ui| {
+        ui.menu_button(format!("{}  Recent Kept Captures", icon::DATABASE), |ui| {
             ui.set_min_width(340.0);
             for clip in &clips {
-                if ui.button(clip.label()).on_hover_text(clip.path.display().to_string()).clicked() {
+                let picture = clip.thumb.clone().filter(|p| p.exists()).unwrap_or_else(|| clip.path.clone());
+                let thumb = self.thumb(ui.ctx(), &picture);
+                if thumb_button(ui, thumb.as_ref(), clip.label()).on_hover_text(clip.path.display().to_string()).clicked() {
                     ui.close();
                     match image::open(&clip.path) {
                         Ok(image) => {
@@ -2453,10 +2481,28 @@ impl Editor {
         self.touch();
     }
 
+    /// Trade the document for the start screen: the thumbnails of recent work.
+    fn show_dashboard(&mut self, ctx: &egui::Context) {
+        if self.home {
+            return;
+        }
+        // A history capture has already been written; a project the user has not saved must not be
+        // thrown away by a menu click.
+        if self.project_path.is_some() && self.revision != self.saved_revision {
+            self.flash("Save this project before opening the dashboard");
+            return;
+        }
+        self.commit_text();
+        self.sync_history();
+        self.load_document(Doc::new(RgbaImage::new(1, 1)), None);
+        self.home = true;
+        self.saved_revision = self.revision;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title("ShotCraft4Kept".to_owned()));
+    }
+
     /// The window with no document: the last edits, then Kept's latest captures, as thumbnails.
     fn start_screen(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
-        self.thumbs_frame = 0;
         // The window is a drop target even before a document is open.
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
             self.open_path(&ctx, path);
@@ -2519,7 +2565,7 @@ impl Editor {
                             ui.add_space(22.0);
                             section(ui, "From Kept");
                             ui.add_space(8.0);
-                            if let Some(path) = self.thumb_grid(ui, "kept", &kept, 3) {
+                            if let Some(path) = self.thumb_grid(ui, "kept", &kept, KEPT_ROWS) {
                                 self.open_path(&ctx, path);
                             }
                         }
@@ -2538,7 +2584,7 @@ impl Editor {
         let mut tiles = Vec::new();
         if self.settings.kept.enabled
             && let Some(kept) = shotcraft_engine::kept::detect()
-            && let Ok(clips) = shotcraft_engine::kept::recent_images(&kept, 9)
+            && let Ok(clips) = shotcraft_engine::kept::recent_images(&kept, (KEPT_ROWS * 3) as u32)
         {
             tiles = clips
                 .into_iter()
@@ -3287,6 +3333,8 @@ fn sampled(stops: &[[u8; 3]], t: f32) -> Color32 {
 impl eframe::App for Editor {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &root.ctx().clone();
+        // Thumbnails decode one per frame wherever they are drawn, so nothing stalls the window.
+        self.thumbs_frame = 0;
         if let Some((_, rx)) = &self.task
             && let Ok(result) = rx.try_recv()
         {

@@ -211,6 +211,31 @@ pub struct Preset {
     pub commentary: Option<shotcraft_doc::model::Commentary>,
 }
 
+/// The extension a shared preset travels in. The file is a preset's own JSON: a background image or
+/// watermark is already part of it as base64 PNG, so the one file carries everything.
+pub const PRESET_EXT: &str = "shotpreset";
+
+impl Preset {
+    /// Write this preset where another copy of ShotCraft4Kept can read it.
+    pub fn save_file(&self, path: &Path) -> Result<()> {
+        write_json(path, self)
+    }
+
+    /// Read a preset written by [`Preset::save_file`], with the comments it may carry dropped.
+    pub fn load_file(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path)?;
+        let mut preset: Self = serde_json::from_slice(&bytes)?;
+        preset.name = preset.name.trim().to_owned();
+        if preset.name.is_empty() {
+            preset.name = path.file_stem().map_or_else(|| "Imported preset".to_owned(), |n| n.to_string_lossy().to_string());
+        }
+        if let Some(commentary) = &mut preset.commentary {
+            commentary.entries.clear();
+        }
+        Ok(preset)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -473,6 +498,22 @@ mod tests {
         let old: Preset = serde_json::from_value(value).unwrap();
         assert_eq!(old.counter, None, "an old preset loads with the default counter style");
         assert_eq!(old.commentary, None, "and no comment band settings");
+    }
+
+    #[test]
+    fn a_preset_file_carries_its_own_images() {
+        let image = image::RgbaImage::from_pixel(3, 2, image::Rgba([9, 8, 7, 255]));
+        let preset = Preset {
+            name: "Brand".into(),
+            background: Background { fill: crate::doc::model::BgFill::Image(std::sync::Arc::new(image)), ..Background::default() },
+            counter: None,
+            commentary: None,
+        };
+        let path = std::env::temp_dir().join(format!("shotcraft-preset-{}.{PRESET_EXT}", std::process::id()));
+        preset.save_file(&path).unwrap();
+        // One file: the image travels inside the JSON as base64 PNG, so nothing else is needed.
+        assert_eq!(Preset::load_file(&path).unwrap(), preset, "the image comes back with the preset");
+        std::fs::remove_file(&path).ok();
     }
 
     #[cfg(unix)]

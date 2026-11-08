@@ -16,7 +16,7 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::{ExportFormat, Preset, Settings, State, default_palette};
+use shotcraft_engine::config::{ExportFormat, PRESET_EXT, Preset, Settings, State, default_palette};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
     Anchor, ArrowStyle, Aspect, Background, BgFill, CommentEntry, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item,
@@ -57,6 +57,8 @@ const BACKGROUND_WIDTH: f32 = 272.0;
 const COMMENTARY_WIDTH: f32 = 300.0;
 /// Width of the collapsed rail the panels fold down to.
 const RAIL_WIDTH: f32 = 40.0;
+/// How close the pointer must be to a handle to grab it, in screen points.
+const HANDLE_GRAB: f32 = 9.0;
 
 const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
     (Tool::Select, theme::ToolIcon::Glyph(icon::CURSOR), "Select (V)", Key::V),
@@ -253,6 +255,8 @@ struct Editor {
     confirm_close: bool,
     allow_close: bool,
     preset_name: String,
+    /// The little window asking for a new preset's name is open.
+    preset_dialog: bool,
     /// The preset last loaded or saved, so a tweak can be written back to it.
     preset_active: Option<String>,
     /// Height of the comment panel, as last dragged.
@@ -349,6 +353,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         confirm_close: false,
         allow_close: false,
         preset_name: String::new(),
+        preset_dialog: false,
         preset_active: None,
         commentary_width,
         commentary_collapsed,
@@ -538,6 +543,19 @@ impl Editor {
             if ui.button(format!("{}  Save As…", icon::DOWNLOAD_SIMPLE)).on_hover_text("Save As (Shift+Ctrl/Cmd+S)").clicked() {
                 ui.close();
                 self.save_as();
+            }
+            ui.separator();
+            if ui
+                .button(format!("{}  Export Preset…", icon::EXPORT))
+                .on_hover_text("Write the background, step and comment look on screen to a preset file")
+                .clicked()
+            {
+                ui.close();
+                self.export_preset();
+            }
+            if ui.button(format!("{}  Import Preset…", icon::FILE_ARROW_DOWN)).on_hover_text("Load a preset file and use it").clicked() {
+                ui.close();
+                self.import_preset();
             }
             ui.separator();
             if ui.button(format!("{}  Close", icon::X)).on_hover_text("Close (Ctrl/Cmd+W)").clicked() {
@@ -1032,6 +1050,8 @@ impl Editor {
                     ui.separator();
                 }
             }
+            // A little air after the last tool, so it does not sit against the rule.
+            ui.add_space(6.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button(RichText::new(icon::DOTS_THREE).size(18.0), |ui| {
                     if ui.button(format!("{}  Save As…", icon::DOWNLOAD_SIMPLE)).clicked() {
@@ -1110,8 +1130,16 @@ impl Editor {
                 self.zoom_by(1.0 / 1.25);
             }
             let mut zoom = self.zoom;
+            // The slider sits in a strip the same height as the buttons beside it and is centred in
+            // it, so the row reads as one line instead of the track floating between glyphs.
+            ui.spacing_mut().slider_width = 44.0;
             let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
-            if ui.add_sized([36.0, 16.0], slider).on_hover_text("Zoom").changed() {
+            let (strip, _) = ui.allocate_exact_size(vec2(44.0, 18.0), Sense::hover());
+            // A hair up: the − and + glyphs sit on their text baseline, a little above the middle.
+            let strip = strip.translate(vec2(0.0, -3.0));
+            let mut centred = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
+            centred.spacing_mut().slider_width = 44.0;
+            if centred.add(slider).on_hover_text("Zoom").changed() {
                 self.zoom_to(zoom, None);
             }
             if tiny_button(ui, icon::PLUS, "Zoom in") {
@@ -1447,6 +1475,126 @@ impl Editor {
         }
     }
 
+    /// A preset holding what is on screen now, ready to be written out or stored.
+    fn preset_from_doc(&self, name: String) -> Option<Preset> {
+        Some(Preset { name, background: self.doc.background.clone()?, counter: Some(self.counter_style.clone()), commentary: self.commentary_style() })
+    }
+
+    /// The little window that asks for a new preset's name, so the panel stays a list of presets.
+    fn preset_naming_popup(&mut self, ui: &mut egui::Ui) {
+        if !self.preset_dialog {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let mut open = true;
+        let mut create = false;
+        let mut cancel = false;
+        // Read the key before the box does: a single-line box eats Enter when it gives up focus.
+        let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+        egui::Window::new("New preset").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, Vec2::ZERO).open(&mut open).show(&ctx, |ui| {
+            ui.set_min_width(250.0);
+            ui.label("Preset name");
+            let field = egui::TextEdit::singleline(&mut self.preset_name).hint_text("Brand preset").desired_width(f32::INFINITY);
+            let resp = ui.add(field);
+            // The name field takes the keyboard as the window appears.
+            if ctx.memory(|m| m.focused()).is_none() {
+                resp.request_focus();
+            }
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!self.preset_name.trim().is_empty(), egui::Button::new("Create")).clicked() {
+                    create = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if enter && !cancel && !self.preset_name.trim().is_empty() {
+            create = true;
+        }
+        if create && let Some(preset) = self.preset_from_doc(self.preset_name.trim().to_owned()) {
+            let stored = preset.clone();
+            let name = preset.name.clone();
+            if self.update_settings(|s| {
+                s.presets.retain(|p| p.name != name);
+                s.presets.push(stored);
+            }) {
+                self.preset_active = Some(name.clone());
+                self.preset_name.clear();
+                self.flash(format!("Preset “{name}” saved"));
+            }
+            cancel = true;
+        }
+        if cancel || !open {
+            self.preset_dialog = false;
+        }
+    }
+
+    /// Put a preset's look on the document: background, counter and the comment band.
+    fn apply_preset(&mut self, preset: &Preset) {
+        self.checkpoint();
+        self.doc.background = Some(preset.background.clone());
+        self.show_background = true;
+        if let Some(counter) = preset.counter.clone() {
+            self.counter_style = counter;
+        }
+        if let Some(style) = preset.commentary.clone() {
+            // The preset carries the band's look; the comments already written stay.
+            let entries = self.doc.commentary.as_ref().map(|c| c.entries.clone()).unwrap_or_default();
+            self.doc.commentary = Some(Commentary { entries, ..style });
+            self.show_commentary = true;
+        }
+        self.preset_active = Some(preset.name.clone());
+        self.touch();
+    }
+
+    /// A name no preset uses yet, so importing never overwrites one of the user's own.
+    fn free_preset_name(&self, wanted: &str) -> String {
+        let taken = |name: &str| self.settings.presets.iter().any(|p| p.name == name);
+        if !taken(wanted) {
+            return wanted.to_owned();
+        }
+        (2..).map(|n| format!("{wanted} {n}")).find(|name| !taken(name)).unwrap_or_else(|| wanted.to_owned())
+    }
+
+    /// Write the look on screen to a preset file another copy of ShotCraft4Kept can read.
+    fn export_preset(&mut self) {
+        let Some(preset) = self.preset_from_doc(self.preset_active.clone().unwrap_or_else(|| "My preset".to_owned())) else {
+            self.flash("Turn on the background tool, then export the preset");
+            return;
+        };
+        let file = format!("{}.{PRESET_EXT}", preset.name.replace(['/', '\\', ':'], "-"));
+        let Some(path) =
+            rfd::FileDialog::new().set_directory(&self.settings.save_dir).set_file_name(file).add_filter("ShotCraft preset", &[PRESET_EXT]).save_file()
+        else {
+            return;
+        };
+        let written = preset.save_file(&path).map_err(|e| format!("Could not write {}: {e}", path.display()));
+        if self.report(written).is_some() {
+            self.flash(format!("Preset written to {}", path.display()));
+        }
+    }
+
+    /// Read a preset file, keep it with the presets and put it on the document.
+    fn import_preset(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("ShotCraft preset", &[PRESET_EXT]).pick_file() else {
+            return;
+        };
+        let read = Preset::load_file(&path).map_err(|e| format!("Could not read {}: {e}", path.display()));
+        let Some(preset) = self.report(read) else { return };
+        let preset = Preset { name: self.free_preset_name(&preset.name), ..preset };
+        let stored = preset.clone();
+        if self.update_settings(|s| {
+            s.presets.retain(|p| p.name != stored.name);
+            s.presets.push(stored);
+        }) {
+            self.apply_preset(&preset);
+            self.flash(format!("Imported the preset “{}”", preset.name));
+        }
+    }
+
     fn background_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         // Brand presets: loading one brings back the background and the counter look.
@@ -1466,31 +1614,30 @@ impl Editor {
                 Some(name) => name.clone(),
                 None => "Brand preset".to_owned(),
             };
-            egui::ComboBox::from_id_salt("preset").selected_text(shown).width((ui.available_width() - 88.0).max(90.0)).show_ui(ui, |ui| {
-                for (i, name) in names.iter().enumerate() {
-                    if ui.selectable_label(false, name).clicked() {
-                        let bg = self.settings.presets[i].background.clone();
-                        let counter = self.settings.presets[i].counter.clone();
-                        let commentary = self.settings.presets[i].commentary.clone();
-                        self.checkpoint();
-                        self.doc.background = Some(bg);
-                        if let Some(counter) = counter {
-                            self.counter_style = counter;
-                        }
-                        if let Some(style) = commentary {
-                            // The preset carries the band's look; the comments already written stay.
-                            let entries = self.doc.commentary.as_ref().map(|c| c.entries.clone()).unwrap_or_default();
-                            self.doc.commentary = Some(Commentary { entries, ..style });
-                            self.show_commentary = true;
-                        }
-                        self.preset_active = Some(name.clone());
-                        self.touch();
+            egui::ComboBox::from_id_salt("preset").selected_text(shown).width(ui.available_width()).show_ui(ui, |ui| {
+                for name in &names {
+                    if ui.selectable_label(false, name).clicked()
+                        && let Some(preset) = self.settings.presets.iter().find(|p| &p.name == name).cloned()
+                    {
+                        self.apply_preset(&preset);
                     }
                 }
                 if names.is_empty() {
                     ui.label(RichText::new("No presets yet").weak());
                 }
             });
+        });
+        ui.horizontal(|ui| {
+            let can_make = self.doc.background.is_some();
+            if ui
+                .add_enabled(can_make, egui::Button::new(format!("{}  New", icon::PLUS)))
+                .on_hover_text("Save what is on screen as a new preset")
+                .on_disabled_hover_text("Turn on the background tool first")
+                .clicked()
+            {
+                self.preset_name.clear();
+                self.preset_dialog = true;
+            }
             if ui
                 .add_enabled(dirty, egui::Button::new(icon::FLOPPY_DISK))
                 .on_hover_text("Save these changes into the preset")
@@ -1529,27 +1676,7 @@ impl Editor {
             .response
             .on_hover_text("Delete a preset");
         });
-        ui.horizontal(|ui| {
-            let name_width = (ui.available_width() - 42.0).max(90.0);
-            ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("Preset name").desired_width(name_width));
-            let can = self.doc.background.is_some() && !self.preset_name.trim().is_empty();
-            if ui.add_enabled(can, egui::Button::new(icon::PLUS)).on_hover_text("Save current background as a preset").clicked()
-                && let Some(background) = self.doc.background.clone()
-            {
-                let name = self.preset_name.trim().to_owned();
-                let counter = self.counter_style.clone();
-                let commentary = self.commentary_style();
-                let saved = self.update_settings(|s| {
-                    s.presets.retain(|p| p.name != name);
-                    s.presets.push(Preset { name: name.clone(), background, counter: Some(counter), commentary });
-                });
-                if saved {
-                    self.preset_name.clear();
-                    self.preset_active = Some(name);
-                    self.flash("Preset saved");
-                }
-            }
-        });
+        self.preset_naming_popup(ui);
         if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(self.doc.background.is_none(), "No background")).clicked() {
             self.checkpoint();
             self.doc.background = None;
@@ -2319,10 +2446,14 @@ impl Editor {
             let b = view.to_base(start);
             let canvas_point = view.to_canvas(start);
             let on_watermark = self.watermark_hit(canvas_point).is_some();
-            let handle = self.selected.and_then(|i| {
-                let it = self.doc.items.get(i)?;
-                it.handles().iter().position(|h| h.distance(b) <= tol * 1.5).map(|h| (i, h))
-            });
+            // Handles are picked where they are drawn, and across the whole document: a corner grab
+            // finds its item even if the selection moved on since the dots were painted.
+            let handle = self
+                .doc
+                .items
+                .iter()
+                .enumerate()
+                .find_map(|(i, it)| it.handles().iter().position(|h| view.to_screen(*h).distance(start) <= HANDLE_GRAB).map(|h| (i, h)));
             self.drag = if middle || self.hand() {
                 Some(EditDrag::Pan { last: start })
             } else if on_watermark {
@@ -2484,7 +2615,8 @@ impl Editor {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if let Some(p) = resp.hover_pos() {
             let b = view.to_base(p);
-            let over_handle = self.selected.and_then(|i| self.doc.items.get(i)).is_some_and(|it| it.handles().iter().any(|h| h.distance(b) <= tol * 1.5));
+            let over_handle =
+                self.selected.and_then(|i| self.doc.items.get(i)).is_some_and(|it| it.handles().iter().any(|h| view.to_screen(*h).distance(p) <= HANDLE_GRAB));
             let icon = if over_handle || self.hand() {
                 egui::CursorIcon::Grab
             } else if self.tool == Tool::Select {

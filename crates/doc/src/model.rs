@@ -591,6 +591,11 @@ impl Item {
                 vec![rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()]
             }
             Shape::Line { a, b } => vec![*a, *b],
+            // A paragraph carries handles on its box corners; a single line of text does not.
+            Shape::Text { pos, text, size, style, wrap: Some(width) } => {
+                let r = text_box(*pos, text, *size, *style, Some(*width));
+                vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
+            }
             Shape::Arrow { a, b, style, bend } => {
                 let mut v = vec![*a, *b];
                 if *style == ArrowStyle::Curved {
@@ -613,6 +618,16 @@ impl Item {
                     p = constrain_aspect(anchor, p, rect.width() / rect.height());
                 }
                 *rect = Rect::from_two_pos(anchor, p);
+            }
+            // A corner drags the wrapping width; the height follows the text it then takes.
+            Shape::Text { pos, text, size, style, wrap: Some(width) } => {
+                let box_rect = text_box(*pos, text, *size, *style, Some(*width));
+                let corners = [box_rect.left_top(), box_rect.right_top(), box_rect.right_bottom(), box_rect.left_bottom()];
+                let anchor_x = corners[(i + 2) % 4].x;
+                let pad = text_padding(*size, *style);
+                let (left, right) = if i == 0 || i == 3 { (p.x, anchor_x) } else { (anchor_x, p.x) };
+                *width = (right - left - 2.0 * pad).max(*size);
+                *pos = pos2(left + pad, pos.y);
             }
             Shape::Line { a, b } => {
                 if i == 0 {
@@ -1285,6 +1300,39 @@ mod tests {
             width: 4.0,
         });
         assert_eq!(doc.next_counter(), 5);
+    }
+
+    #[test]
+    fn a_paragraph_resizes_by_its_corners() {
+        let text = |wrap: Option<f32>| Item {
+            shape: Shape::Text { pos: pos2(10.0, 10.0), text: "one two three four five".into(), size: 16.0, style: TextStyle::Plain, wrap },
+            color: Color32::WHITE,
+            width: 2.0,
+        };
+        let shape_of = |item: &Item| match &item.shape {
+            Shape::Text { wrap, pos, .. } => (*wrap, *pos),
+            _ => (None, Pos2::ZERO),
+        };
+
+        assert!(text(None).handles().is_empty(), "a single line has no box to drag");
+
+        let mut paragraph = text(Some(60.0));
+        let handles = paragraph.handles();
+        assert_eq!(handles.len(), 4, "a paragraph carries a handle on each corner");
+
+        // Dragging the right-hand corners out widens the wrap and leaves the text where it was.
+        paragraph.set_handle(1, pos2(handles[1].x + 40.0, handles[1].y), false);
+        let (wrap, pos) = shape_of(&paragraph);
+        assert!(wrap.is_some_and(|w| w > 60.0), "the paragraph takes the width it is given: {wrap:?}");
+        assert_eq!(pos, pos2(10.0, 10.0), "the text does not move when its right edge is dragged");
+
+        // The left corners move the box's left edge with the text.
+        let handles = paragraph.handles();
+        let before = shape_of(&paragraph).0.unwrap_or(0.0);
+        paragraph.set_handle(0, pos2(handles[0].x - 30.0, handles[0].y), false);
+        let (wrap, pos) = shape_of(&paragraph);
+        assert!(wrap.is_some_and(|w| w > before), "pulling the left edge out widens it too: {wrap:?}");
+        assert!(pos.x < 10.0, "and the text follows its left edge: {pos:?}");
     }
 
     #[test]

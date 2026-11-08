@@ -267,18 +267,23 @@ impl Default for Settings {
             kept: KeptSettings::default(),
             gradients: Vec::new(),
             presets: Vec::new(),
-            palette: vec![
-                [255, 59, 48, 255],
-                [255, 149, 0, 255],
-                [255, 204, 0, 255],
-                [52, 199, 89, 255],
-                [10, 132, 255, 255],
-                [175, 82, 222, 255],
-                [255, 255, 255, 255],
-                [28, 28, 30, 255],
-            ],
+            palette: default_palette(),
         }
     }
+}
+
+/// The colours a fresh palette starts with. Solid Colors keeps these; anything you add can be removed.
+pub fn default_palette() -> Vec<[u8; 4]> {
+    vec![
+        [255, 59, 48, 255],
+        [255, 149, 0, 255],
+        [255, 204, 0, 255],
+        [52, 199, 89, 255],
+        [10, 132, 255, 255],
+        [175, 82, 222, 255],
+        [255, 255, 255, 255],
+        [28, 28, 30, 255],
+    ]
 }
 
 impl Settings {

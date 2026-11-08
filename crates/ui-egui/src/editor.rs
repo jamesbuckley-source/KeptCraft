@@ -16,7 +16,7 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
+use shotcraft_engine::config::{ExportFormat, Preset, Settings, State, default_palette};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
     Anchor, ArrowStyle, Aspect, Background, BgFill, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item, Orient,
@@ -1564,6 +1564,8 @@ impl Editor {
         }
         section(ui, "Solid Colors");
         let palette = self.settings.palette.clone();
+        // Only the colours the user added get a delete badge; the built-in ones stay put.
+        let built_in = default_palette();
         let mut remove_colour = None;
         let mut edit_colour = None;
         let mut open_custom = false;
@@ -1576,18 +1578,27 @@ impl Editor {
                 if fill == Some(BgFill::Solid(col)) {
                     ui.painter().circle_stroke(r.center(), 13.0, Stroke::new(2.0, theme::ACCENT));
                 }
-                // A little x in the corner, like the gradient tiles.
-                let badge = Rect::from_center_size(r.right_top() + vec2(-2.0, 2.0), Vec2::splat(13.0));
-                let del = ui.interact(badge, ui.id().with(("delete-colour", i)), Sense::click());
-                ui.painter().circle_filled(badge.center(), 6.5, Color32::from_black_alpha(170));
-                ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(8.0), Color32::WHITE);
-                let resp = resp.on_hover_text("Double-click to edit, or use the x to remove it");
-                if del.on_hover_text("Remove this colour").clicked() {
-                    remove_colour = Some(i);
-                } else if resp.double_clicked() {
-                    edit_colour = Some((i, col));
-                } else if resp.clicked() {
-                    self.set_fill(BgFill::Solid(col));
+                if built_in.contains(c) {
+                    let resp = resp.on_hover_text("Double-click to edit");
+                    if resp.double_clicked() {
+                        edit_colour = Some((i, col));
+                    } else if resp.clicked() {
+                        self.set_fill(BgFill::Solid(col));
+                    }
+                } else {
+                    // A little x in the corner, like the gradient tiles.
+                    let badge = Rect::from_center_size(r.right_top() + vec2(-2.0, 2.0), Vec2::splat(13.0));
+                    let del = ui.interact(badge, ui.id().with(("delete-colour", i)), Sense::click());
+                    ui.painter().circle_filled(badge.center(), 6.5, Color32::from_black_alpha(170));
+                    ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(8.0), Color32::WHITE);
+                    let resp = resp.on_hover_text("Double-click to edit, or use the x to remove it");
+                    if del.on_hover_text("Remove this colour").clicked() {
+                        remove_colour = Some(i);
+                    } else if resp.double_clicked() {
+                        edit_colour = Some((i, col));
+                    } else if resp.clicked() {
+                        self.set_fill(BgFill::Solid(col));
+                    }
                 }
             }
             // Any colour of your own: a circle with a plus, as tall as the swatches beside it.
@@ -1794,6 +1805,8 @@ impl Editor {
     fn colour_window(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.colour_draft else { return };
         let editing = self.colour_edit;
+        // The built-in colours can be changed, but not removed.
+        let removable = editing.and_then(|i| self.settings.palette.get(i)).is_some_and(|c| !default_palette().contains(c));
         let mut open = true;
         let mut action = None;
         egui::Window::new(if editing.is_some() { "Edit colour" } else { "New colour" })
@@ -1813,7 +1826,7 @@ impl Editor {
                         if ui.button("Save").clicked() {
                             action = Some(ColourAction::Save(draft));
                         }
-                        if ui.button(format!("{} Delete", icon::TRASH)).clicked() {
+                        if removable && ui.button(format!("{} Delete", icon::TRASH)).clicked() {
                             action = Some(ColourAction::Delete);
                         }
                     } else {

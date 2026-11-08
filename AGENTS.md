@@ -67,9 +67,11 @@ Files the app downloads at runtime instead of bundling (the OCR models, CC BY-SA
 
 ### Licenses and icons
 
-`THIRD-PARTY-LICENSES.md` is generated; never edit it by hand.
-After changing dependencies, regenerate it with `cargo about generate --workspace --locked about.hbs -o THIRD-PARTY-LICENSES.md` (cargo-about 0.9.2); CI fails when it is stale or a crate's license is not in `about.toml`'s `accepted` list.
-The check compares the file's non-blank lines with their line endings stripped, because cargo-about writes each crate's "used by" list in a different order on each platform and copies some license texts with their own CRLF endings.
+`THIRD-PARTY-LICENSES.md` is generated on Linux; never edit it by hand.
+After changing dependencies, regenerate it on Linux with `cargo about generate --workspace --locked about.hbs -o THIRD-PARTY-LICENSES.md` (cargo-about 0.9.2).
+A Windows run writes a different list, because cargo-about's `ring` workaround picks up different files there; if you cannot run Linux, push the change and take the `THIRD-PARTY-LICENSES` artifact the failing CI job uploads.
+CI fails when the file is stale or a crate's license is not in `about.toml`'s `accepted` list.
+The check compares the file's non-blank lines with their endings stripped and sorted in byte order, because cargo-about orders each crate's "used by" list at random and copies some license texts with their own CRLF endings.
 Add a license to `accepted` only if it is permissive or, like MPL-2.0, file-level copyleft that applies to unmodified crates.
 
 The app icon's master is `assets/app-icon/keptcraft.svg`; after editing it, run `packaging/icons.sh` (needs resvg) and commit the PNGs it writes.

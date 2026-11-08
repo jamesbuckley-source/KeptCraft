@@ -22,6 +22,7 @@ stays close enough to merge from upstream.
 | Zoom and move the canvas | Wheel zooms smoothly around the pointer, the toolbar slider and ± buttons zoom, a reset returns to the fit; hold Space (or pick the hand, or drag with the middle button) to move around a zoomed image |
 | Numbered steps with commentary | A resizable panel on the right (250 px wide by default, its width and fold remembered) with a box per step: select text in a comment to make it bold or italic from the B/I buttons, bullet the lines you select, rename a step's badge by double-clicking it, an optional "Comments" header you can rename, band and text colours, text size, space between items and padding, on any edge — right for a tall image, bottom for a wide one, with round badges in each counter's colour |
 | Background tool | Gradients (built-in and your own — double-click one to edit it), solid colours you can add to and remove from your palette, image and blurred fills, padding, corner radius, shadow, aspect ratio, alignment, auto-balance, a draggable image watermark, saved presets that carry the background, the counter look and every comment band setting, shared as a single self-contained .shotpreset file (File ▸ Export Preset… / Import Preset…) Every colour picker has an eyedropper for colours in the image |
+| Start screen | Launching the editor with no file shows the last six files you edited and Kept's nine newest captures as thumbnails (three to a row, tall shots cropped to fill the tile), with an Open a file… card when there is no history yet |
 | Editable project files | `.shotcraft` (JSON with the base image and every annotation) |
 | Scrolling capture | Stitches frames while you or auto-scroll move the content |
 | Quick Access Overlay | Floating card after each capture: copy, save, annotate, pin, upload, OCR, or drag the file into another app |
@@ -210,4 +211,5 @@ See [`NOTICE`](NOTICE) for the bundled third-party material, [`ATTRIBUTION.md`](
 
 Contributions are dual-licensed the same way; see [`CONTRIBUTING.md`](CONTRIBUTING.md#license).
 To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
+
 

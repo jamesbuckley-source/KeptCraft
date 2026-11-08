@@ -4,6 +4,7 @@
 //! preview is pixel-for-pixel what gets saved. Only handles and the live text editor are
 //! drawn by egui on top.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
@@ -59,6 +60,25 @@ const COMMENTARY_WIDTH: f32 = 300.0;
 const RAIL_WIDTH: f32 = 40.0;
 /// How close the pointer must be to a handle to grab it, in screen points.
 const HANDLE_GRAB: f32 = 9.0;
+
+/// Start-screen thumbnails: three to a row, and how tall a tile is next to its width.
+const TILE_GAP: f32 = 14.0;
+/// A tile's height as a fraction of its width; the crop in [`cover_thumb`] matches it.
+const TILE_SHAPE: f32 = 0.62;
+const TILE_ROUNDING: u8 = 10;
+/// Width a thumbnail is decoded at, which covers a tile on a wide window.
+const THUMB_WIDTH: u32 = 420;
+/// Widest a tile gets, so three of them stay a column rather than filling a wide window.
+const TILE_MAX: f32 = 320.0;
+
+/// A start-screen thumbnail: the file it opens, the picture to show (Kept keeps its own small
+/// copy) and what the tooltip says.
+#[derive(Clone)]
+struct Tile {
+    open: PathBuf,
+    picture: PathBuf,
+    label: String,
+}
 
 const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
     (Tool::Select, theme::ToolIcon::Glyph(icon::CURSOR), "Select (V)", Key::V),
@@ -196,6 +216,14 @@ struct Editor {
     save_target: Option<PathBuf>,
     /// Files the File menu offers under Recent Files, most recent last.
     recent: Vec<PathBuf>,
+    /// No document yet: the window shows the start screen instead of a canvas.
+    home: bool,
+    /// Thumbnails for the start screen, decoded once per file.
+    thumbs: HashMap<PathBuf, Option<TextureHandle>>,
+    /// How many thumbnails this frame has decoded; one a frame keeps the window responsive.
+    thumbs_frame: u32,
+    /// Kept's newest captures for the start screen, read once.
+    kept_tiles: Option<Vec<Tile>>,
     /// The gradient being built in the background panel's popup, while it is open.
     gradient_draft: Option<OwnedGradient>,
     /// Which of the user's gradients the draft rewrites, when it was opened from a tile.
@@ -276,16 +304,29 @@ struct Editor {
 /// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
 /// manager, a script); without it Save exports a new timestamped file into the save folder.
 pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_target: Option<PathBuf>) -> anyhow::Result<()> {
+    run_with(doc, history_id, path, save_target, false)
+}
+
+/// Open the editor with no document, showing the start screen of recent edits and Kept's captures.
+pub fn run_home() -> anyhow::Result<()> {
+    run_with(Doc::new(RgbaImage::new(1, 1)), None, None, None, true)
+}
+
+fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_target: Option<PathBuf>, home: bool) -> anyhow::Result<()> {
     let screen = capture::primary_logical_rect();
     let scale = capture::primary_scale();
-    let natural = vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0);
+    let natural = if home { vec2(1240.0, 860.0) } else { vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0) };
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
     let size = natural.max(vec2(1300.0, 740.0)).min(screen.size() * 0.88);
     let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
-    let title = match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
-        Some(name) => format!("{} — ShotCraft4Kept", name.to_string_lossy()),
-        None => "ShotCraft4Kept — Annotate".to_owned(),
+    let title = if home {
+        "ShotCraft4Kept".to_owned()
+    } else {
+        match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
+            Some(name) => format!("{} — ShotCraft4Kept", name.to_string_lossy()),
+            None => "ShotCraft4Kept — Annotate".to_owned(),
+        }
     };
     let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(1040.0, 520.0)).with_drag_and_drop(true);
     let settings = Settings::load();
@@ -307,6 +348,10 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         project_path,
         save_target,
         recent,
+        home,
+        thumbs: HashMap::new(),
+        thumbs_frame: 0,
+        kept_tiles: None,
         gradient_draft: None,
         gradient_edit: None,
         colour_draft: None,
@@ -366,6 +411,35 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
 
 fn swatch_color(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+}
+
+/// The tile size for the room the start screen has: three across, as wide as they can be.
+fn tile_size(ui: &egui::Ui) -> (f32, f32) {
+    let width = ((ui.available_width() - 2.0 * TILE_GAP) / 3.0).floor().clamp(120.0, TILE_MAX);
+    (width, (width * TILE_SHAPE).round())
+}
+
+/// A tile's picture: the middle of the image at the tile's shape, so a tall capture fills the tile
+/// instead of shrinking to a sliver you cannot read.
+fn cover_thumb(path: &Path) -> Option<RgbaImage> {
+    let image = image::open(path).ok()?.into_rgba8();
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let aspect = TILE_SHAPE.recip();
+    let (cw, ch) = if w / h > aspect { (h * aspect, h) } else { (w, w / aspect) };
+    let x = ((w - cw) / 2.0).max(0.0) as u32;
+    let y = ((h - ch) / 2.0).max(0.0) as u32;
+    let crop = image::imageops::crop_imm(&image, x, y, (cw as u32).max(1), (ch as u32).max(1)).to_image();
+    let height = (THUMB_WIDTH as f32 * TILE_SHAPE).round() as u32;
+    Some(image::imageops::resize(&crop, THUMB_WIDTH, height.max(1), image::imageops::FilterType::Triangle))
+}
+
+/// What a thumbnail's tooltip calls a file: its name, and the folder it came from.
+fn file_label(path: &Path) -> String {
+    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
+    match path.parent() {
+        Some(dir) => format!("{name}\n{}", dir.display()),
+        None => name,
+    }
 }
 
 /// Keep `path` at the end of the recent list, the newest last, and on disk for the next window.
@@ -613,6 +687,7 @@ impl Editor {
             remember_recent(&mut self.recent, path);
         }
         self.doc = doc;
+        self.home = false;
         self.show_background = self.doc.background.is_some();
         self.project_path = path.filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)));
         self.history_id = None;
@@ -2378,6 +2453,180 @@ impl Editor {
         self.touch();
     }
 
+    /// The window with no document: the last edits, then Kept's latest captures, as thumbnails.
+    fn start_screen(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        self.thumbs_frame = 0;
+        // The window is a drop target even before a document is open.
+        if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
+            self.open_path(&ctx, path);
+            return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::O))
+            && let Some(path) = dialogs::pick_image()
+        {
+            self.open_path(&ctx, path);
+            return;
+        }
+        egui::Panel::top("start-bar").exact_size(48.0).show(root, |ui| {
+            ui.horizontal_centered(|ui| {
+                self.file_menu(ui);
+                ui.separator();
+                ui.label(RichText::new("ShotCraft4Kept").size(15.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let open = egui::Button::new(RichText::new(format!("{}  Open a file…", icon::FOLDER_OPEN)).color(Color32::WHITE)).fill(theme::ACCENT);
+                    if ui.add(open).clicked()
+                        && let Some(path) = dialogs::pick_image()
+                    {
+                        self.open_path(&ctx, path);
+                    }
+                });
+            });
+        });
+        egui::Panel::bottom("start-hint").exact_size(32.0).show(root, |ui| {
+            ui.horizontal_centered(|ui| {
+                match self.status.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(5)) {
+                    Some((msg, _)) => ui.label(msg.clone()),
+                    None => ui.label(RichText::new("Pick a capture to annotate, or open a file.").weak()),
+                };
+            });
+        });
+        let margin = egui::Margin { left: 26, right: 26, top: 6, bottom: 6 };
+        egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(margin)).show(root, |ui| {
+            // One column of three, centred, so a wide window does not blow the tiles up.
+            let column = (3.0 * TILE_MAX + 2.0 * TILE_GAP).min(ui.available_width());
+            let height = ui.available_height();
+            ui.vertical_centered(|ui| {
+                ui.allocate_ui_with_layout(vec2(column, height), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        ui.add_space(10.0);
+                        section(ui, "Recent edits");
+                        ui.add_space(8.0);
+                        let recents: Vec<Tile> =
+                            self.recent.iter().rev().take(6).map(|path| Tile { open: path.clone(), picture: path.clone(), label: file_label(path) }).collect();
+                        if recents.is_empty() {
+                            if self.open_tile(ui).clicked()
+                                && let Some(path) = dialogs::pick_image()
+                            {
+                                self.open_path(&ctx, path);
+                            }
+                        } else if let Some(path) = self.thumb_grid(ui, "recent", &recents, 2) {
+                            self.open_path(&ctx, path);
+                        }
+
+                        let kept = self.kept_tiles();
+                        if !kept.is_empty() {
+                            ui.add_space(22.0);
+                            section(ui, "From Kept");
+                            ui.add_space(8.0);
+                            if let Some(path) = self.thumb_grid(ui, "kept", &kept, 3) {
+                                self.open_path(&ctx, path);
+                            }
+                        }
+                        ui.add_space(16.0);
+                    });
+                });
+            });
+        });
+    }
+
+    /// Kept's newest captures, read once: the query opens its database, so it is not a per-frame cost.
+    fn kept_tiles(&mut self) -> Vec<Tile> {
+        if let Some(tiles) = &self.kept_tiles {
+            return tiles.clone();
+        }
+        let mut tiles = Vec::new();
+        if self.settings.kept.enabled
+            && let Some(kept) = shotcraft_engine::kept::detect()
+            && let Ok(clips) = shotcraft_engine::kept::recent_images(&kept, 9)
+        {
+            tiles = clips
+                .into_iter()
+                .filter(|clip| clip.path.exists())
+                .map(|clip| Tile {
+                    picture: clip.thumb.clone().filter(|p| p.exists()).unwrap_or_else(|| clip.path.clone()),
+                    open: clip.path.clone(),
+                    label: clip.label(),
+                })
+                .collect();
+        }
+        self.kept_tiles = Some(tiles.clone());
+        tiles
+    }
+
+    /// The card that stands in for a thumbnail when there is nothing to show yet.
+    fn open_tile(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let (tile_w, tile_h) = tile_size(ui);
+        let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, tile_h), Sense::click());
+        let hover = resp.hovered();
+        let painter = ui.painter();
+        painter.rect_filled(rect, TILE_ROUNDING, ui.visuals().widgets.inactive.weak_bg_fill);
+        let colour = if hover { theme::ACCENT } else { ui.visuals().widgets.inactive.fg_stroke.color };
+        painter.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, icon::FOLDER_OPEN, FontId::proportional(26.0), colour);
+        painter.text(rect.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, "Open a file…", FontId::proportional(13.0), colour);
+        if hover {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        resp.on_hover_text("Open an image or a .shotcraft project")
+    }
+
+    /// Lay tiles out three to a row, at most `rows` rows, and report the one clicked.
+    fn thumb_grid(&mut self, ui: &mut egui::Ui, id: &str, tiles: &[Tile], rows: usize) -> Option<PathBuf> {
+        let (tile_w, tile_h) = tile_size(ui);
+        let mut clicked = None;
+        ui.push_id(id, |ui| {
+            ui.spacing_mut().item_spacing.x = TILE_GAP;
+            for (row, chunk) in tiles.chunks(3).take(rows).enumerate() {
+                ui.horizontal(|ui| {
+                    for tile in chunk {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, tile_h), Sense::click());
+                        match self.thumb(ui.ctx(), &tile.picture) {
+                            Some(texture) => {
+                                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                                ui.painter().add(EShape::image(texture.id(), rect, uv, Color32::WHITE));
+                            }
+                            None => {
+                                ui.painter().rect_filled(rect, TILE_ROUNDING, ui.visuals().widgets.inactive.weak_bg_fill);
+                            }
+                        }
+                        let (stroke, width) = if resp.hovered() { (theme::ACCENT, 2.0) } else { (ui.visuals().widgets.noninteractive.bg_stroke.color, 1.0) };
+                        ui.painter().rect_stroke(rect, TILE_ROUNDING, Stroke::new(width, stroke), StrokeKind::Inside);
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.on_hover_text(tile.label.clone()).clicked() {
+                            clicked = Some(tile.open.clone());
+                        }
+                    }
+                });
+                if row + 1 < rows {
+                    ui.add_space(TILE_GAP);
+                }
+            }
+        });
+        clicked
+    }
+
+    /// A tile-sized thumbnail, decoded on first sight and then kept.
+    fn thumb(&mut self, ctx: &egui::Context, path: &Path) -> Option<TextureHandle> {
+        if let Some(hit) = self.thumbs.get(path) {
+            return hit.clone();
+        }
+        // One decode a frame: a folder of 4K captures must not stall the window as it opens.
+        if self.thumbs_frame >= 1 {
+            ctx.request_repaint();
+            return None;
+        }
+        self.thumbs_frame += 1;
+        let made = cover_thumb(path).map(|img| {
+            let size = [img.width() as usize, img.height() as usize];
+            let colour = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+            ctx.load_texture(format!("thumb:{}", path.display()), colour, TextureOptions::LINEAR)
+        });
+        self.thumbs.insert(path.to_path_buf(), made.clone());
+        made
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let canvas = ui.max_rect();
@@ -3047,6 +3296,10 @@ impl eframe::App for Editor {
                 Err(e) => self.flash(format!("{e:#}")),
             }
         }
+        if self.home {
+            self.start_screen(root);
+            return;
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             self.commit_text();
             if self.revision != self.saved_revision && self.history_id.is_some() {
@@ -3180,6 +3433,27 @@ impl eframe::App for Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tall_capture_is_cropped_to_the_tile_shape() {
+        // A tall strip with a red band across its middle: the tile keeps that band, not a sliver.
+        let mut strip = RgbaImage::from_pixel(40, 400, image::Rgba([0, 0, 220, 255]));
+        for y in 190..210 {
+            for x in 0..40 {
+                strip.put_pixel(x, y, image::Rgba([230, 40, 40, 255]));
+            }
+        }
+        let path = std::env::temp_dir().join(format!("shotcraft-cover-{}.png", std::process::id()));
+        strip.save(&path).unwrap();
+
+        let thumb = cover_thumb(&path).unwrap();
+        assert_eq!(thumb.width(), THUMB_WIDTH, "the tile is decoded at its own width");
+        let expected = (THUMB_WIDTH as f32 * TILE_SHAPE).round() as u32;
+        assert_eq!(thumb.height(), expected, "and at the tile's shape");
+        let middle = thumb.get_pixel(THUMB_WIDTH / 2, expected / 2).0;
+        assert!(middle[0] > 150 && middle[2] < 140, "the middle of a tall image is what shows: {middle:?}");
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn view_mapping_round_trips() {

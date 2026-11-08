@@ -258,6 +258,10 @@ fn dispatch(cmd: Cmd) -> anyhow::Result<()> {
             if let Some(id) = history {
                 return editor::run(history::load_doc(&id)?, Some(id), None, save_to);
             }
+            if filepath.is_none() && save_to.is_none() && !overwrite {
+                // Launched on its own: the start screen, with the last edits and Kept's captures.
+                return editor::run_home();
+            }
             let Some(path) = filepath.or_else(dialogs::pick_image) else { return Ok(()) };
             let target = save_to.or_else(|| overwrite.then(|| path.clone()));
             editor::run(Doc::open(&path)?, None, Some(path), target)

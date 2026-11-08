@@ -19,8 +19,8 @@ use image::RgbaImage;
 use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
-    Anchor, ArrowStyle, Aspect, Background, BgFill, Commentary, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient,
-    PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
+    Anchor, ArrowStyle, Aspect, Background, BgFill, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item, Orient,
+    OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -1029,6 +1029,7 @@ impl Editor {
         let tool = match &selected_shape {
             Some(Shape::Arrow { .. }) => Tool::Arrow,
             Some(Shape::Text { .. }) => Tool::Text,
+            Some(Shape::Counter { .. }) => Tool::Counter,
             Some(Shape::Redact { .. }) => Tool::Redact,
             Some(Shape::Spotlight { .. }) => Tool::Spotlight,
             _ => self.tool,
@@ -1095,17 +1096,24 @@ impl Editor {
                 });
             }
             Tool::Counter => {
+                // A step already on the image is what the row edits, so it can be restyled later.
+                if let Some(style) = self.selected.and_then(|i| self.doc.items.get(i)).and_then(|it| match &it.shape {
+                    Shape::Counter { style, .. } => Some(style.clone()),
+                    _ => None,
+                }) {
+                    self.counter_style = style;
+                }
                 let mut style = self.counter_style.clone();
                 let mut changed = false;
                 let label = match style.label {
                     CounterLabel::Numbers => "123",
-                    CounterLabel::Letters => "abc",
+                    CounterLabel::Letters => "ABC",
                 };
                 egui::ComboBox::from_id_salt("counter-label").selected_text(label).width(64.0).show_ui(ui, |ui| {
                     for kind in [CounterLabel::Numbers, CounterLabel::Letters] {
                         let text = match kind {
                             CounterLabel::Numbers => "123",
-                            CounterLabel::Letters => "abc",
+                            CounterLabel::Letters => "ABC",
                         };
                         if ui.selectable_label(style.label == kind, text).clicked() {
                             style.label = kind;
@@ -1114,8 +1122,27 @@ impl Editor {
                     }
                 });
                 changed |= ui.add(egui::DragValue::new(&mut style.size).range(14.0..=160.0).suffix(" px").speed(0.5)).on_hover_text("Diameter").changed();
-                changed |= ui.add(egui::Slider::new(&mut style.padding, 0.0..=0.5).show_value(false)).on_hover_text("Padding around the label").changed();
-                changed |= ui.add(egui::Slider::new(&mut style.shadow, 0.0..=1.0).show_value(false)).on_hover_text("Drop shadow").changed();
+                changed |= ui
+                    .add_sized([64.0, 20.0], egui::Slider::new(&mut style.padding, 0.0..=0.5).show_value(false))
+                    .on_hover_text("Padding around the label")
+                    .changed();
+                changed |= ui.add(egui::Checkbox::without_text(&mut style.shadow_on)).on_hover_text("Drop shadow").changed();
+                ui.label("Shadow");
+                if style.shadow_on {
+                    changed |= ui
+                        .add_sized([64.0, 20.0], egui::Slider::new(&mut style.shadow, 0.05..=1.0).show_value(false))
+                        .on_hover_text("Shadow strength")
+                        .changed();
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut style.shadow_blur).range(0.0..=40.0).suffix(" px").speed(0.2))
+                        .on_hover_text("Shadow blur: how far its soft edge reaches")
+                        .changed();
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut style.shadow_distance).range(0.0..=40.0).suffix(" off").speed(0.2))
+                        .on_hover_text("Shadow offset from the circle")
+                        .changed();
+                    changed |= direction_dial(ui, &mut style.shadow_angle);
+                }
                 let mut ring = style.outline.unwrap_or(self.color);
                 if ui.color_edit_button_srgba(&mut ring).on_hover_text("Ring colour").changed() {
                     style.outline = Some(ring);
@@ -1508,7 +1535,7 @@ impl Editor {
         }
     }
 
-    /// The band under the image: one comment per numbered step, with the strip's own colours.
+    /// The band beside the image: one comment per numbered step, with the strip's own colours.
     fn commentary_panel(&mut self, ui: &mut egui::Ui) {
         let counters: Vec<(u32, String)> = self
             .doc
@@ -1520,9 +1547,10 @@ impl Editor {
             })
             .collect();
         let mut changed = false;
+        let mut picked = None;
+        let mut on = self.doc.commentary.is_some();
         ui.horizontal(|ui| {
-            let mut on = self.doc.commentary.is_some();
-            if ui.checkbox(&mut on, "Commentary under the image").on_hover_text("One line per numbered step, added below it").changed() {
+            if ui.checkbox(&mut on, "Commentary").on_hover_text("One line per numbered step, added beside the image").changed() {
                 self.checkpoint();
                 self.doc.commentary = on.then(Commentary::default);
                 changed = true;
@@ -1530,19 +1558,35 @@ impl Editor {
             if counters.is_empty() {
                 ui.label(RichText::new("Place a numbered step to describe it here").color(ui.visuals().weak_text_color()));
             }
-            if let Some(c) = &mut self.doc.commentary {
+            if let Some(mut c) = self.doc.commentary.clone() {
+                egui::ComboBox::from_id_salt("commentary-side").selected_text(c.side.label()).width(76.0).show_ui(ui, |ui| {
+                    for side in CommentarySide::ALL {
+                        if ui.selectable_label(c.side == side, side.label()).clicked() {
+                            c.side = side;
+                            changed = true;
+                        }
+                    }
+                });
                 changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
                 ui.label("Text");
                 changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
                 ui.label("Padding");
                 changed |= ui.add(egui::DragValue::new(&mut c.padding).range(0.0..=120.0).suffix(" px")).changed();
+                changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
+                if !c.match_counter {
+                    changed |= ui.color_edit_button_srgba(&mut c.badge).on_hover_text("Badge colour").changed();
+                }
+                self.doc.commentary = Some(c);
             }
         });
-        if let Some(c) = &mut self.doc.commentary {
+        if let Some(mut c) = self.doc.commentary.clone() {
             egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
                 for (n, label) in &counters {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).strong());
+                        let badge = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
+                        if ui.add(badge).on_hover_text("Click to adjust this step").clicked() {
+                            picked = Some(*n);
+                        }
                         let width = (ui.available_width() - 8.0).max(80.0);
                         if ui.add(egui::TextEdit::singleline(c.entry_mut(*n)).hint_text("comment").desired_width(width)).changed() {
                             changed = true;
@@ -1550,9 +1594,23 @@ impl Editor {
                     });
                 }
             });
+            if changed {
+                self.doc.commentary = Some(c);
+            }
+        }
+        if let Some(n) = picked {
+            self.select_step(n);
         }
         if changed {
             self.touch();
+        }
+    }
+
+    /// Select the numbered step `n` on the image, so the counter row edits its look.
+    fn select_step(&mut self, n: u32) {
+        if let Some(i) = self.doc.items.iter().position(|it| matches!(&it.shape, Shape::Counter { n: c, .. } if *c == n)) {
+            self.selected = Some(i);
+            self.tool = Tool::Counter;
         }
     }
 
@@ -1749,12 +1807,18 @@ impl Editor {
                     }
                 }
                 Tool::Counter => {
-                    self.checkpoint();
-                    let n = self.doc.next_counter();
-                    let item = self.new_item(Shape::Counter { center: b, n, style: self.counter_style.clone() });
-                    self.doc.items.push(item);
-                    self.selected = Some(self.doc.items.len() - 1);
-                    self.touch();
+                    // Clicking a step that is already there adjusts it; a click on empty space adds the next one.
+                    match hit.filter(|&i| matches!(self.doc.items[i].shape, Shape::Counter { .. })) {
+                        Some(i) => self.selected = Some(i),
+                        None => {
+                            self.checkpoint();
+                            let n = self.doc.next_counter();
+                            let item = self.new_item(Shape::Counter { center: b, n, style: self.counter_style.clone() });
+                            self.doc.items.push(item);
+                            self.selected = Some(self.doc.items.len() - 1);
+                            self.touch();
+                        }
+                    }
                 }
                 _ => {
                     self.commit_text();
@@ -1763,10 +1827,19 @@ impl Editor {
             }
         }
         if resp.double_clicked()
-            && let Some(i) = self.selected
-            && matches!(self.doc.items.get(i).map(|it| &it.shape), Some(Shape::Text { .. }))
+            && let Some(p) = pointer
         {
-            self.start_text_edit(i);
+            let b = view.to_base(p);
+            let hit = self.doc.items.iter().rposition(|it| it.hit(b, tol));
+            match hit.map(|i| (i, &self.doc.items[i].shape)) {
+                Some((i, Shape::Text { .. })) => self.start_text_edit(i),
+                // A double click on a step brings its look back into the options row.
+                Some((i, Shape::Counter { .. })) => {
+                    self.selected = Some(i);
+                    self.tool = Tool::Counter;
+                }
+                _ => {}
+            }
         }
 
         // Hover cursor feedback.
@@ -2043,6 +2116,27 @@ fn update_created(it: &mut Item, start: Pos2, b: Pos2, shift: bool) {
         }
         _ => {}
     }
+}
+
+/// A small dial for a shadow direction: click or drag inside it to point the shadow.
+fn direction_dial(ui: &mut egui::Ui, angle: &mut f32) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click_and_drag());
+    let center = rect.center();
+    let r = 10.0;
+    let mut changed = false;
+    if let Some(p) = resp.interact_pointer_pos() {
+        let v = p - center;
+        if v.length() > 1.5 {
+            *angle = v.y.atan2(v.x).to_degrees().rem_euclid(360.0);
+            changed = true;
+        }
+    }
+    let painter = ui.painter().clone();
+    painter.circle_stroke(center, r, Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color));
+    let a = angle.to_radians();
+    painter.line_segment([center, center + Vec2::angled(a) * r], Stroke::new(2.0, theme::ACCENT));
+    painter.circle_filled(center + Vec2::angled(a) * r * 0.55, 2.5, theme::ACCENT);
+    resp.on_hover_text("Shadow direction").changed() || changed
 }
 
 fn snap45(a: Pos2, b: Pos2) -> Pos2 {

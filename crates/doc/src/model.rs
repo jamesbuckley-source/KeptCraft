@@ -63,7 +63,7 @@ pub enum RedactMode {
 pub enum CounterLabel {
     #[default]
     Numbers,
-    /// 1 = a, 26 = z, 27 = aa, so a run of steps can read as a list.
+    /// 1 = A, 26 = Z, 27 = AA, so a run of steps can read as a list.
     Letters,
 }
 
@@ -76,15 +76,54 @@ pub struct CounterStyle {
     /// Ring around the circle, drawn in this colour; `None` keeps the fill only.
     pub outline: Option<Color32>,
     pub outline_width: f32,
-    /// 0..=1 drop shadow behind the circle.
+    /// 0..=1 drop shadow strength; [`CounterStyle::shadow_on`] decides whether it is drawn.
     pub shadow: f32,
+    /// Draw the drop shadow at all.
+    #[serde(default = "yes")]
+    pub shadow_on: bool,
+    /// How far the shadow's soft edge reaches, in base pixels.
+    #[serde(default = "shadow_blur_default")]
+    pub shadow_blur: f32,
+    /// Direction the shadow falls, in degrees: 0 = right, 90 = down, 180 = left, 270 = up.
+    #[serde(default = "shadow_angle_default")]
+    pub shadow_angle: f32,
+    /// How far the shadow sits from the circle, in base pixels.
+    #[serde(default = "shadow_distance_default")]
+    pub shadow_distance: f32,
     /// Fraction of the radius kept clear between the label and the circle's edge.
     pub padding: f32,
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn shadow_blur_default() -> f32 {
+    6.0
+}
+
+fn shadow_angle_default() -> f32 {
+    90.0
+}
+
+fn shadow_distance_default() -> f32 {
+    4.0
+}
+
 impl Default for CounterStyle {
     fn default() -> Self {
-        Self { size: 28.0, label: CounterLabel::Numbers, outline: None, outline_width: 3.0, shadow: 0.3, padding: 0.28 }
+        Self {
+            size: 28.0,
+            label: CounterLabel::Numbers,
+            outline: None,
+            outline_width: 3.0,
+            shadow: 0.3,
+            shadow_on: true,
+            shadow_blur: shadow_blur_default(),
+            shadow_angle: shadow_angle_default(),
+            shadow_distance: shadow_distance_default(),
+            padding: 0.28,
+        }
     }
 }
 
@@ -97,26 +136,54 @@ impl CounterStyle {
     }
 }
 
-/// Spreadsheet-style letters: 1 = a … 26 = z, 27 = aa.
+/// Spreadsheet-style letters: 1 = A … 26 = Z, 27 = AA.
 pub fn letters(n: u32) -> String {
     let mut n = n.max(1);
     let mut out = String::new();
     while n > 0 {
         let rem = ((n - 1) % 26) as u8;
-        out.insert(0, (b'a' + rem) as char);
+        out.insert(0, (b'A' + rem) as char);
         n = (n - 1) / 26;
     }
     out
 }
 
-/// One numbered step's comment, shown under the image.
+/// One numbered step's comment, shown beside the image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommentEntry {
     pub n: u32,
     pub text: String,
 }
 
-/// The band appended under the image: one line per numbered step that has something to say.
+/// Which edge of the image the comment band is attached to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentarySide {
+    Top,
+    Right,
+    #[default]
+    Bottom,
+    Left,
+}
+
+impl CommentarySide {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Right, Self::Bottom, Self::Left];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Top => "Top",
+            Self::Right => "Right",
+            Self::Bottom => "Bottom",
+            Self::Left => "Left",
+        }
+    }
+
+    /// True when the band sits above or below the image, so the image keeps its width.
+    pub fn horizontal(&self) -> bool {
+        matches!(self, Self::Top | Self::Bottom)
+    }
+}
+
+/// The band beside the image: one entry per numbered step that has something to say.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Commentary {
     pub background: Color32,
@@ -125,11 +192,33 @@ pub struct Commentary {
     /// Space above the first line, below the last, and on both sides.
     pub padding: f32,
     pub entries: Vec<CommentEntry>,
+    /// Edge of the image the band is attached to.
+    #[serde(default)]
+    pub side: CommentarySide,
+    /// Ring each step in the colour of its own counter instead of [`Commentary::badge`].
+    #[serde(default = "yes")]
+    pub match_counter: bool,
+    /// Badge colour used when the step no longer has a counter, or matching is off.
+    #[serde(default = "badge_default")]
+    pub badge: Color32,
+}
+
+fn badge_default() -> Color32 {
+    Color32::from_rgb(226, 62, 48)
 }
 
 impl Default for Commentary {
     fn default() -> Self {
-        Self { background: Color32::from_rgb(28, 28, 30), text_color: Color32::WHITE, size: 22.0, padding: 24.0, entries: Vec::new() }
+        Self {
+            background: Color32::from_rgb(28, 28, 30),
+            text_color: Color32::WHITE,
+            size: 22.0,
+            padding: 24.0,
+            entries: Vec::new(),
+            side: CommentarySide::Bottom,
+            match_counter: true,
+            badge: badge_default(),
+        }
     }
 }
 
@@ -866,11 +955,27 @@ mod tests {
     }
 
     #[test]
+    fn an_old_counter_style_loads_with_the_new_shadow_defaults() {
+        let old = r#"{"size":28.0,"label":"Numbers","outline":null,"outline_width":3.0,"shadow":0.3,"padding":0.28}"#;
+        let style: CounterStyle = serde_json::from_str(old).unwrap();
+        assert!(style.shadow_on, "projects saved before the switch keep their shadow");
+        assert_eq!((style.shadow_blur, style.shadow_angle, style.shadow_distance), (6.0, 90.0, 4.0));
+    }
+
+    #[test]
+    fn an_old_commentary_still_loads() {
+        let old = r#"{"background":[28,28,30,255],"text_color":[255,255,255,255],"size":22.0,"padding":24.0,"entries":[]}"#;
+        let commentary: Commentary = serde_json::from_str(old).unwrap();
+        assert_eq!(commentary.side, CommentarySide::Bottom, "a band saved before sides existed stays under the image");
+        assert!(commentary.match_counter, "badges follow their counters by default");
+    }
+
+    #[test]
     fn counter_labels_read_as_numbers_or_letters() {
         assert_eq!(CounterStyle::default().label_for(3), "3");
         let letters_style = CounterStyle { label: CounterLabel::Letters, ..Default::default() };
-        assert_eq!((letters(1).as_str(), letters(26).as_str(), letters(27).as_str()), ("a", "z", "aa"));
-        assert_eq!(letters_style.label_for(28), "ab");
+        assert_eq!((letters(1).as_str(), letters(26).as_str(), letters(27).as_str()), ("A", "Z", "AA"));
+        assert_eq!(letters_style.label_for(28), "AB");
     }
 
     #[test]

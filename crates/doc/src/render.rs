@@ -11,8 +11,8 @@ use tiny_skia::{
 
 use crate::effects::{self, IRect};
 use crate::model::{
-    ArrowStyle, Aspect, Background, BgFill, Commentary, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, Watermark, arrow_head_len,
-    curve_control, curve_point, highlighter_width, text_padding, text_size,
+    ArrowStyle, Aspect, Background, BgFill, Commentary, CommentarySide, CounterStyle, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle,
+    Watermark, arrow_head_len, curve_control, curve_point, highlighter_width, text_padding, text_size,
 };
 use crate::{Error, Result, fonts};
 
@@ -80,48 +80,157 @@ pub fn render(doc: &Doc, base: &RgbaImage, o: &RenderOpts) -> Result<Rendered> {
     };
     match &doc.commentary {
         Some(commentary) if !commentary.filled().is_empty() => {
-            let pixmap = with_commentary(rendered.pixmap, commentary, s)?;
-            Ok(Rendered { pixmap, ..rendered })
+            let image = vec2(rendered.pixmap.width() as f32, rendered.pixmap.height() as f32);
+            match commentary_layout(doc, commentary, image, s) {
+                Some(layout) => {
+                    let pixmap = with_commentary(rendered.pixmap, &layout, commentary)?;
+                    let offset = rendered.offset + layout.image_at;
+                    Ok(Rendered { pixmap, offset, ..rendered })
+                }
+                None => Ok(rendered),
+            }
         }
         _ => Ok(rendered),
     }
 }
 
-/// Height the comment band adds below a canvas `width` pixels wide, in output pixels.
-pub fn commentary_height(commentary: &Commentary, width: f32, s: f32) -> f32 {
-    let lines = commentary_lines(commentary, width, s).len();
-    if lines == 0 {
-        return 0.0;
+/// One step as it appears in the band: its badge label, badge colour and wrapped comment.
+struct BandStep {
+    label: String,
+    color: Color32,
+    lines: Vec<String>,
+}
+
+/// Where the image and its comment band land in the finished picture, in output pixels.
+struct BandLayout {
+    out: Vec2,
+    image_at: Vec2,
+    band_at: Vec2,
+    band: Vec2,
+    steps: Vec<BandStep>,
+    size: f32,
+    pad: f32,
+    line_step: f32,
+    indent: f32,
+    badge_r: f32,
+}
+
+/// Each step's badge colour and label, taken from the counters already on the image.
+fn counter_marks(doc: &Doc) -> Vec<(u32, Color32, String)> {
+    doc.items
+        .iter()
+        .filter_map(|item| match &item.shape {
+            Shape::Counter { n, style, .. } => Some((*n, item.color, style.label_for(*n))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Lay the filled comments out beside the image, wrapping each one to the room it gets.
+fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) -> Option<BandLayout> {
+    let marks = counter_marks(doc);
+    let filled = commentary.filled();
+    if filled.is_empty() {
+        return None;
     }
     let size = commentary.size.max(6.0) * s;
-    (lines as f32 * size * 1.55 + 2.0 * commentary.padding.max(0.0) * s).round()
-}
-
-/// Each filled step as it appears in the band, wrapped to the band's inner width.
-fn commentary_lines(commentary: &Commentary, width: f32, s: f32) -> Vec<String> {
-    let size = commentary.size.max(6.0) * s;
     let pad = commentary.padding.max(0.0) * s;
-    let avail = (width - 2.0 * pad).max(size);
-    commentary.filled().iter().flat_map(|e| fonts::wrap_lines(&format!("{}  {}", e.n, e.text.trim()), size, avail)).collect()
-}
+    let line_step = size * 1.55;
+    let badge_r = size * 0.62;
+    let indent = badge_r * 2.0 + size * 0.45;
+    let steps = |avail: f32| -> Vec<BandStep> {
+        filled
+            .iter()
+            .map(|entry| {
+                let mark = marks.iter().find(|(n, ..)| *n == entry.n);
+                let color = match mark {
+                    Some((_, color, _)) if commentary.match_counter => *color,
+                    _ => commentary.badge,
+                };
+                let label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
+                BandStep { label, color, lines: fonts::wrap_lines(entry.text.trim(), size, avail) }
+            })
+            .collect()
+    };
+    let total_lines = |steps: &[BandStep]| steps.iter().map(|st| st.lines.len()).sum::<usize>();
+    let cross = |lines: usize| 2.0 * pad + lines as f32 * line_step;
 
-/// Append the comment band under the finished image: a filled strip, then one line per step.
-fn with_commentary(src: Pixmap, commentary: &Commentary, s: f32) -> Result<Pixmap> {
-    let (w, h) = (src.width(), src.height());
-    let extra = commentary_height(commentary, w as f32, s).max(1.0) as u32;
-    let mut out = pixmap(w, h + extra)?;
-    out.draw_pixmap(0, 0, src.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
-    let band = tiny_skia::Rect::from_xywh(0.0, h as f32, w as f32, extra as f32).ok_or(Error::TooLarge(w, h))?;
-    out.fill_rect(band, &paint(commentary.background), Transform::identity(), None);
-    let size = commentary.size.max(6.0) * s;
-    let pad = commentary.padding.max(0.0) * s;
-    let step = size * 1.55;
-    let mut y = h as f32 + pad + size;
-    for line in commentary_lines(commentary, w as f32, s) {
-        if let Some(path) = fonts::text_path(&line, size, pos2(pad, y)) {
-            out.fill_path(&path, &paint(commentary.text_color), FillRule::Winding, Transform::identity(), None);
+    let horizontal = commentary.side.horizontal();
+    let steps = if horizontal {
+        steps((image.x - 2.0 * pad - indent).max(size * 4.0))
+    } else {
+        // Widen the column until the comments fit the image's height, then keep it as narrow as works.
+        let min_w = 2.0 * pad + indent + size * 6.0;
+        let max_w = (image.x * 0.9).max(min_w);
+        const TRIES: u8 = 16;
+        let mut chosen = None;
+        for i in 0..=TRIES {
+            let width = min_w + (max_w - min_w) * f32::from(i) / f32::from(TRIES);
+            let candidate = steps((width - 2.0 * pad - indent).max(size * 4.0));
+            if cross(total_lines(&candidate)) <= image.y || i == TRIES {
+                chosen = Some(candidate);
+                break;
+            }
         }
-        y += step;
+        chosen.unwrap_or_default()
+    };
+    let thickness = steps.iter().flat_map(|st| st.lines.iter()).map(|line| fonts::measure(line, size).x).fold(0.0, f32::max);
+
+    let mut layout = BandLayout { out: Vec2::ZERO, image_at: Vec2::ZERO, band_at: Vec2::ZERO, band: Vec2::ZERO, size, pad, line_step, indent, badge_r, steps };
+    let band_cross = cross(total_lines(&layout.steps)).ceil();
+    match commentary.side {
+        CommentarySide::Top => {
+            layout.band = vec2(image.x, band_cross);
+            layout.out = vec2(image.x, image.y + band_cross);
+            layout.image_at = vec2(0.0, band_cross);
+        }
+        CommentarySide::Bottom => {
+            layout.band = vec2(image.x, band_cross);
+            layout.out = vec2(image.x, image.y + band_cross);
+            layout.band_at = vec2(0.0, image.y);
+        }
+        CommentarySide::Left | CommentarySide::Right => {
+            // A column keeps the image's height and centres the image if the text needs more.
+            let band_width = (2.0 * pad + indent + thickness).ceil();
+            let height = image.y.max(band_cross);
+            layout.band = vec2(band_width, height);
+            layout.out = vec2(image.x + band_width, height);
+            layout.image_at = vec2(if commentary.side == CommentarySide::Left { band_width } else { 0.0 }, ((height - image.y) / 2.0).round());
+            if commentary.side == CommentarySide::Right {
+                layout.band_at = vec2(image.x, 0.0);
+            }
+        }
+    }
+    Some(layout)
+}
+
+/// Place the finished image and draw the band: a filled strip, then a badge and text per step.
+fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) -> Result<Pixmap> {
+    let (w, h) = (src.width(), src.height());
+    let mut out = pixmap(layout.out.x as u32, layout.out.y as u32)?;
+    out.draw_pixmap(layout.image_at.x as i32, layout.image_at.y as i32, src.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+    let band = tiny_skia::Rect::from_xywh(layout.band_at.x, layout.band_at.y, layout.band.x, layout.band.y).ok_or(Error::TooLarge(w, h))?;
+    out.fill_rect(band, &paint(commentary.background), Transform::identity(), None);
+
+    let mut top = layout.band_at.y + layout.pad;
+    let x = layout.band_at.x + layout.pad;
+    for step in &layout.steps {
+        let badge_at = pos2(x + layout.badge_r, top + layout.size * 0.6);
+        if let Some(path) = PathBuilder::from_circle(badge_at.x, badge_at.y, layout.badge_r) {
+            out.fill_path(&path, &paint(step.color), FillRule::Winding, Transform::identity(), None);
+        }
+        let badge_text = layout.badge_r * 1.15;
+        let m = fonts::measure(&step.label, badge_text);
+        let label_at = badge_at - m * 0.5;
+        if let Some(path) = fonts::text_path(&step.label, badge_text, label_at) {
+            out.fill_path(&path, &paint(contrast_on(step.color)), FillRule::Winding, Transform::identity(), None);
+        }
+        for line in &step.lines {
+            if let Some(path) = fonts::text_path(line, layout.size, pos2(x + layout.indent, top)) {
+                out.fill_path(&path, &paint(commentary.text_color), FillRule::Winding, Transform::identity(), None);
+            }
+            top += layout.line_step;
+        }
     }
     Ok(out)
 }
@@ -135,10 +244,7 @@ pub fn output_size(doc: &Doc, o: &RenderOpts) -> Vec2 {
         _ => content,
     };
     match &doc.commentary {
-        Some(commentary) => {
-            let band = commentary_height(commentary, base.x, o.scale);
-            base + vec2(0.0, band.round())
-        }
+        Some(commentary) => commentary_layout(doc, commentary, base, o.scale).map_or(base, |l| l.out),
         None => base,
     }
 }
@@ -445,11 +551,8 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
         Shape::Text { pos, text, size, style, wrap } => draw_text(pm, *pos, TextSpec { text, size: *size, style: *style, wrap: *wrap }, item.color, ts),
         Shape::Counter { center, n, style } => {
             let r = style.size.max(8.0) / 2.0;
-            if style.shadow > 0.0
-                && let Some(path) = PathBuilder::from_circle(center.x + r * 0.14, center.y + r * 0.2, r)
-            {
-                let alpha = (140.0 * style.shadow.clamp(0.0, 1.0)) as u8;
-                pm.fill_path(&path, &paint(Color32::from_black_alpha(alpha)), FillRule::Winding, ts, None);
+            if style.shadow_on && style.shadow > 0.0 {
+                draw_counter_shadow(pm, *center, r, style, ts);
             }
             if let Some(path) = PathBuilder::from_circle(center.x, center.y, r) {
                 pm.fill_path(&path, &p, FillRule::Winding, ts, None);
@@ -517,6 +620,26 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
                 let t = ts.pre_translate(rect.min.x, rect.min.y).pre_scale(rect.width() / src.width() as f32, rect.height() / src.height() as f32);
                 pm.draw_pixmap(0, 0, src.as_ref(), &PixmapPaint { quality: FilterQuality::Bilinear, ..Default::default() }, t, None);
             }
+        }
+    }
+}
+
+/// Soft drop shadow: concentric discs, outermost first, so the edge fades outward and inward
+/// stacking reaches the requested strength.
+fn draw_counter_shadow(pm: &mut Pixmap, center: Pos2, r: f32, style: &CounterStyle, ts: Transform) {
+    let strength = style.shadow.clamp(0.0, 1.0);
+    let angle = style.shadow_angle.to_radians();
+    let at = center + vec2(angle.cos(), angle.sin()) * style.shadow_distance.max(0.0);
+    let blur = style.shadow_blur.clamp(0.0, 64.0);
+    let alpha = (78.0 * strength).round() as u8;
+    if alpha == 0 {
+        return;
+    }
+    const RINGS: u8 = 6;
+    for ring in (0..RINGS).rev() {
+        let spread = blur * f32::from(ring) / f32::from(RINGS - 1);
+        if let Some(path) = PathBuilder::from_circle(at.x, at.y, r + spread) {
+            pm.fill_path(&path, &paint(Color32::from_black_alpha(alpha)), FillRule::Winding, ts, None);
         }
     }
 }
@@ -854,6 +977,121 @@ mod tests {
         let wrapped = crate::render::output_size(&doc, &RenderOpts::default()).y;
         assert!(wrapped > single + 8.0, "the wrapped band is taller: {wrapped} vs {single}");
         assert_eq!(flatten(&doc).unwrap().width(), 120, "wrapping never widens the image");
+    }
+
+    #[test]
+    fn the_comment_band_moves_to_the_chosen_side() {
+        use crate::model::CommentarySide;
+        let render_side = |side| {
+            let mut doc = Doc::new(RgbaImage::from_pixel(60, 40, image::Rgba([10, 10, 10, 255])));
+            doc.commentary = Some(Commentary {
+                size: 10.0,
+                padding: 4.0,
+                side,
+                background: Color32::from_rgb(200, 40, 40),
+                entries: vec![crate::model::CommentEntry { n: 1, text: "step".into() }],
+                ..Default::default()
+            });
+            flatten(&doc).unwrap()
+        };
+        let band = [200, 40, 40, 255];
+        let shot = [10, 10, 10, 255];
+
+        let bottom = render_side(CommentarySide::Bottom);
+        assert_eq!(bottom.width(), 60);
+        assert!(bottom.height() > 40);
+        assert_eq!(bottom.get_pixel(1, bottom.height() - 1).0, band, "the band is under the image");
+        assert_eq!(bottom.get_pixel(1, 1).0, shot, "the image starts at the top");
+
+        let top = render_side(CommentarySide::Top);
+        assert!(top.height() > 40);
+        assert_eq!(top.get_pixel(1, 1).0, band, "the band is above the image");
+        assert_eq!(top.get_pixel(1, top.height() - 1).0, shot);
+
+        let left = render_side(CommentarySide::Left);
+        assert_eq!(left.height(), 40, "a side band keeps the image's height");
+        assert!(left.width() > 60);
+        assert_eq!(left.get_pixel(0, 1).0, band, "the band is left of the image");
+        assert_eq!(left.get_pixel(left.width() - 1, 20).0, shot);
+
+        let right = render_side(CommentarySide::Right);
+        assert!(right.width() > 60);
+        assert_eq!(right.get_pixel(right.width() - 1, 1).0, band, "the band is right of the image");
+        assert_eq!(right.get_pixel(0, 20).0, shot);
+    }
+
+    #[test]
+    fn a_comment_badge_takes_its_counter_colour() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(80, 20, image::Rgba([0, 0, 0, 255])));
+        let blue = Color32::from_rgb(0, 160, 255);
+        doc.items.push(Item {
+            shape: Shape::Counter { center: pos2(70.0, 10.0), n: 1, style: CounterStyle { size: 8.0, ..Default::default() } },
+            color: blue,
+            width: 4.0,
+        });
+        let mut commentary = Commentary {
+            size: 12.0,
+            padding: 4.0,
+            badge: Color32::from_rgb(255, 0, 255),
+            entries: vec![crate::model::CommentEntry { n: 1, text: "step".into() }],
+            ..Default::default()
+        };
+        doc.commentary = Some(commentary.clone());
+        let band_pixels = |img: &RgbaImage| -> (usize, usize) {
+            let mut blue = 0;
+            let mut magenta = 0;
+            for y in 20..img.height() {
+                for x in 0..img.width() {
+                    let [r, g, b, _] = img.get_pixel(x, y).0;
+                    if b > 180 && r < 90 && g > 100 {
+                        blue += 1;
+                    }
+                    if r > 180 && b > 180 && g < 90 {
+                        magenta += 1;
+                    }
+                }
+            }
+            (blue, magenta)
+        };
+        let matched = band_pixels(&flatten(&doc).unwrap());
+        assert!(matched.0 > 20, "the badge uses the counter's colour: {matched:?}");
+
+        commentary.match_counter = false;
+        doc.commentary = Some(commentary);
+        let fixed = band_pixels(&flatten(&doc).unwrap());
+        assert!(fixed.1 > 20, "with matching off the badge uses its own colour: {fixed:?}");
+    }
+
+    #[test]
+    fn the_counter_shadow_follows_its_switch_direction_and_blur() {
+        let flat = |style: CounterStyle| {
+            let mut doc = Doc::new(RgbaImage::from_pixel(60, 60, image::Rgba([255, 255, 255, 255])));
+            doc.items.push(Item { shape: Shape::Counter { center: pos2(30.0, 30.0), n: 1, style }, color: Color32::WHITE, width: 4.0 });
+            flatten(&doc).unwrap()
+        };
+        let style = |angle: f32, blur: f32| CounterStyle {
+            size: 20.0,
+            shadow_on: true,
+            shadow: 1.0,
+            shadow_blur: blur,
+            shadow_angle: angle,
+            shadow_distance: 6.0,
+            ..Default::default()
+        };
+
+        // A white counter on white paper: only the shadow can darken anything around it.
+        let off = flat(CounterStyle { size: 20.0, shadow_on: false, ..Default::default() });
+        assert!((41..60).all(|y| (0..60).all(|x| off.get_pixel(x, y).0[0] == 255)), "no shadow when the switch is off");
+
+        let down = flat(style(90.0, 4.0));
+        assert!(down.get_pixel(30, 44).0[0] < 180, "the shadow falls below: {:?}", down.get_pixel(30, 44).0);
+        assert!(down.get_pixel(30, 14).0[0] > 240, "the top stays clean");
+
+        let up = flat(style(270.0, 4.0));
+        assert!(up.get_pixel(30, 16).0[0] < 180, "the shadow falls above: {:?}", up.get_pixel(30, 16).0);
+
+        assert!(flat(style(90.0, 6.0)).get_pixel(30, 50).0[0] < 240, "a blurred shadow reaches further out");
+        assert!(flat(style(90.0, 0.0)).get_pixel(30, 50).0[0] > 240, "a hard shadow stops at the circle");
     }
 
     #[test]

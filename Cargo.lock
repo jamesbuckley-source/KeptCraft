@@ -4621,7 +4621,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shotcraft-doc"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 dependencies = [
  "base64",
  "ecolor",
@@ -4637,7 +4637,7 @@ dependencies = [
 
 [[package]]
 name = "shotcraft-engine"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 dependencies = [
  "arboard",
  "chrono",
@@ -4663,7 +4663,7 @@ dependencies = [
 
 [[package]]
 name = "shotcraft-ui-egui"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4685,7 +4685,7 @@ dependencies = [
 
 [[package]]
 name = "shotcraft4kept"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "base64",

@@ -59,6 +59,98 @@ pub enum RedactMode {
     Solid,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CounterLabel {
+    #[default]
+    Numbers,
+    /// 1 = a, 26 = z, 27 = aa, so a run of steps can read as a list.
+    Letters,
+}
+
+/// How numbered steps look: size, label kind, ring, shadow and the space around the label.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CounterStyle {
+    /// Circle diameter in base pixels.
+    pub size: f32,
+    pub label: CounterLabel,
+    /// Ring around the circle, drawn in this colour; `None` keeps the fill only.
+    pub outline: Option<Color32>,
+    pub outline_width: f32,
+    /// 0..=1 drop shadow behind the circle.
+    pub shadow: f32,
+    /// Fraction of the radius kept clear between the label and the circle's edge.
+    pub padding: f32,
+}
+
+impl Default for CounterStyle {
+    fn default() -> Self {
+        Self { size: 28.0, label: CounterLabel::Numbers, outline: None, outline_width: 3.0, shadow: 0.3, padding: 0.28 }
+    }
+}
+
+impl CounterStyle {
+    pub fn label_for(&self, n: u32) -> String {
+        match self.label {
+            CounterLabel::Numbers => n.to_string(),
+            CounterLabel::Letters => letters(n),
+        }
+    }
+}
+
+/// Spreadsheet-style letters: 1 = a … 26 = z, 27 = aa.
+pub fn letters(n: u32) -> String {
+    let mut n = n.max(1);
+    let mut out = String::new();
+    while n > 0 {
+        let rem = ((n - 1) % 26) as u8;
+        out.insert(0, (b'a' + rem) as char);
+        n = (n - 1) / 26;
+    }
+    out
+}
+
+/// One numbered step's comment, shown under the image.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CommentEntry {
+    pub n: u32,
+    pub text: String,
+}
+
+/// The band appended under the image: one line per numbered step that has something to say.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Commentary {
+    pub background: Color32,
+    pub text_color: Color32,
+    pub size: f32,
+    /// Space above the first line, below the last, and on both sides.
+    pub padding: f32,
+    pub entries: Vec<CommentEntry>,
+}
+
+impl Default for Commentary {
+    fn default() -> Self {
+        Self { background: Color32::from_rgb(28, 28, 30), text_color: Color32::WHITE, size: 22.0, padding: 24.0, entries: Vec::new() }
+    }
+}
+
+impl Commentary {
+    /// The entries that actually say something, in step order.
+    pub fn filled(&self) -> Vec<&CommentEntry> {
+        let mut out: Vec<&CommentEntry> = self.entries.iter().filter(|e| !e.text.trim().is_empty()).collect();
+        out.sort_by_key(|e| e.n);
+        out
+    }
+
+    pub fn entry_mut(&mut self, n: u32) -> &mut String {
+        if let Some(i) = self.entries.iter().position(|e| e.n == n) {
+            return &mut self.entries[i].text;
+        }
+        self.entries.push(CommentEntry { n, text: String::new() });
+        let i = self.entries.len() - 1;
+        &mut self.entries[i].text
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
     Rect {
@@ -97,6 +189,8 @@ pub enum Shape {
     Counter {
         center: Pos2,
         n: u32,
+        #[serde(default)]
+        style: CounterStyle,
     },
     Redact {
         rect: Rect,
@@ -126,7 +220,10 @@ pub const COUNTER_RADIUS_PER_WIDTH: f32 = 3.2;
 
 impl Item {
     pub fn counter_radius(&self) -> f32 {
-        (self.width * COUNTER_RADIUS_PER_WIDTH).max(12.0)
+        match &self.shape {
+            Shape::Counter { style, .. } => style.size.max(8.0) / 2.0,
+            _ => (self.width * COUNTER_RADIUS_PER_WIDTH).max(12.0),
+        }
     }
 
     pub fn bounds(&self) -> Rect {
@@ -604,6 +701,9 @@ pub struct Doc {
     /// Non-destructive crop in base pixels.
     pub crop: Option<Rect>,
     pub background: Option<Background>,
+    /// One comment line per numbered step, drawn in a band under the image.
+    #[serde(default)]
+    pub commentary: Option<Commentary>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -616,7 +716,7 @@ struct ProjectFile {
 
 impl Doc {
     pub fn new(base: RgbaImage) -> Self {
-        Self { base: Arc::new(base), items: Vec::new(), crop: None, background: None }
+        Self { base: Arc::new(base), items: Vec::new(), crop: None, background: None, commentary: None }
     }
 
     pub fn full_rect(&self) -> Rect {
@@ -766,6 +866,14 @@ mod tests {
     }
 
     #[test]
+    fn counter_labels_read_as_numbers_or_letters() {
+        assert_eq!(CounterStyle::default().label_for(3), "3");
+        let letters_style = CounterStyle { label: CounterLabel::Letters, ..Default::default() };
+        assert_eq!((letters(1).as_str(), letters(26).as_str(), letters(27).as_str()), ("a", "z", "aa"));
+        assert_eq!(letters_style.label_for(28), "ab");
+    }
+
+    #[test]
     fn a_paragraph_is_taller_and_narrower_than_one_line() {
         let text = "the quick brown fox jumps over the lazy dog";
         let one = text_size(text, 20.0, None);
@@ -866,7 +974,7 @@ mod tests {
     fn counters_continue_numbering() {
         let mut doc = sample_doc();
         assert_eq!(doc.next_counter(), 1);
-        doc.items.push(Item { shape: Shape::Counter { center: Pos2::ZERO, n: 4 }, color: Color32::RED, width: 4.0 });
+        doc.items.push(Item { shape: Shape::Counter { center: Pos2::ZERO, n: 4, style: CounterStyle::default() }, color: Color32::RED, width: 4.0 });
         assert_eq!(doc.next_counter(), 5);
     }
 }

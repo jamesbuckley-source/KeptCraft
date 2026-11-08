@@ -11,8 +11,8 @@ use tiny_skia::{
 
 use crate::effects::{self, IRect};
 use crate::model::{
-    ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, Watermark, arrow_head_len, curve_control,
-    curve_point, highlighter_width, text_padding, text_size,
+    ArrowStyle, Aspect, Background, BgFill, Commentary, Doc, GRADIENTS, Item, OwnedGradient, RedactMode, Shape, TextStyle, Watermark, arrow_head_len,
+    curve_control, curve_point, highlighter_width, text_padding, text_size,
 };
 use crate::{Error, Result, fonts};
 
@@ -71,22 +71,75 @@ pub fn render(doc: &Doc, base: &RgbaImage, o: &RenderOpts) -> Result<Rendered> {
             draw_item(&mut content, item, ts, s, region);
         }
     }
-    Ok(match (&doc.background, o.background && !o.ignore_crop) {
+    let rendered = match (&doc.background, o.background && !o.ignore_crop) {
         (Some(bg), true) => {
             let (pixmap, offset) = compose_background(&content, bg, s)?;
             Rendered { pixmap, region, offset, scale: s }
         }
         _ => Rendered { pixmap: content, region, offset: Vec2::ZERO, scale: s },
-    })
+    };
+    match &doc.commentary {
+        Some(commentary) if !commentary.filled().is_empty() => {
+            let pixmap = with_commentary(rendered.pixmap, commentary, s)?;
+            Ok(Rendered { pixmap, ..rendered })
+        }
+        _ => Ok(rendered),
+    }
+}
+
+/// Height the comment band adds below a canvas `width` pixels wide, in output pixels.
+pub fn commentary_height(commentary: &Commentary, width: f32, s: f32) -> f32 {
+    let lines = commentary_lines(commentary, width, s).len();
+    if lines == 0 {
+        return 0.0;
+    }
+    let size = commentary.size.max(6.0) * s;
+    (lines as f32 * size * 1.55 + 2.0 * commentary.padding.max(0.0) * s).round()
+}
+
+/// Each filled step as it appears in the band, wrapped to the band's inner width.
+fn commentary_lines(commentary: &Commentary, width: f32, s: f32) -> Vec<String> {
+    let size = commentary.size.max(6.0) * s;
+    let pad = commentary.padding.max(0.0) * s;
+    let avail = (width - 2.0 * pad).max(size);
+    commentary.filled().iter().flat_map(|e| fonts::wrap_lines(&format!("{}  {}", e.n, e.text.trim()), size, avail)).collect()
+}
+
+/// Append the comment band under the finished image: a filled strip, then one line per step.
+fn with_commentary(src: Pixmap, commentary: &Commentary, s: f32) -> Result<Pixmap> {
+    let (w, h) = (src.width(), src.height());
+    let extra = commentary_height(commentary, w as f32, s).max(1.0) as u32;
+    let mut out = pixmap(w, h + extra)?;
+    out.draw_pixmap(0, 0, src.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+    let band = tiny_skia::Rect::from_xywh(0.0, h as f32, w as f32, extra as f32).ok_or(Error::TooLarge(w, h))?;
+    out.fill_rect(band, &paint(commentary.background), Transform::identity(), None);
+    let size = commentary.size.max(6.0) * s;
+    let pad = commentary.padding.max(0.0) * s;
+    let step = size * 1.55;
+    let mut y = h as f32 + pad + size;
+    for line in commentary_lines(commentary, w as f32, s) {
+        if let Some(path) = fonts::text_path(&line, size, pos2(pad, y)) {
+            out.fill_path(&path, &paint(commentary.text_color), FillRule::Winding, Transform::identity(), None);
+        }
+        y += step;
+    }
+    Ok(out)
 }
 
 /// Size [`render`] would produce, without rendering.
 pub fn output_size(doc: &Doc, o: &RenderOpts) -> Vec2 {
     let region = content_region(doc, o);
     let content = vec2((region.width() * o.scale).round().max(1.0), (region.height() * o.scale).round().max(1.0));
-    match (&doc.background, o.background && !o.ignore_crop) {
+    let base = match (&doc.background, o.background && !o.ignore_crop) {
         (Some(bg), true) => background_layout(content, bg, o.scale).0,
         _ => content,
+    };
+    match &doc.commentary {
+        Some(commentary) => {
+            let band = commentary_height(commentary, base.x, o.scale);
+            base + vec2(0.0, band.round())
+        }
+        None => base,
     }
 }
 
@@ -390,13 +443,26 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
             }
         }
         Shape::Text { pos, text, size, style, wrap } => draw_text(pm, *pos, TextSpec { text, size: *size, style: *style, wrap: *wrap }, item.color, ts),
-        Shape::Counter { center, n } => {
-            let r = item.counter_radius();
+        Shape::Counter { center, n, style } => {
+            let r = style.size.max(8.0) / 2.0;
+            if style.shadow > 0.0
+                && let Some(path) = PathBuilder::from_circle(center.x + r * 0.14, center.y + r * 0.2, r)
+            {
+                let alpha = (140.0 * style.shadow.clamp(0.0, 1.0)) as u8;
+                pm.fill_path(&path, &paint(Color32::from_black_alpha(alpha)), FillRule::Winding, ts, None);
+            }
             if let Some(path) = PathBuilder::from_circle(center.x, center.y, r) {
                 pm.fill_path(&path, &p, FillRule::Winding, ts, None);
             }
-            let label = n.to_string();
-            let size = r * 1.15;
+            if let Some(ring) = style.outline
+                && style.outline_width > 0.0
+                && let Some(path) = PathBuilder::from_circle(center.x, center.y, (r - style.outline_width / 2.0).max(1.0))
+            {
+                pm.stroke_path(&path, &paint(ring), &stroke(style.outline_width), ts, None);
+            }
+            let label = style.label_for(*n);
+            // The label fills what the padding leaves inside the circle.
+            let size = (r * (1.0 - style.padding.clamp(0.0, 0.6))) * 1.7;
             let m = fonts::measure(&label, size);
             draw_text(pm, *center - m * 0.5, TextSpec { text: &label, size, style: TextStyle::Plain, wrap: None }, contrast_on(item.color), ts);
         }
@@ -716,7 +782,7 @@ mod tests {
         doc.background = Some(Background { auto_balance: true, ..Default::default() });
         let alone = render(&doc, &doc.base, &RenderOpts::default()).unwrap().region;
         assert_eq!(alone, Rect::from_min_max(pos2(50.0, 0.0), pos2(150.0, 100.0)));
-        doc.items.push(Item { shape: Shape::Counter { center: pos2(15.0, 50.0), n: 1 }, color: Color32::RED, width: 4.0 });
+        doc.items.push(Item { shape: Shape::Counter { center: pos2(15.0, 50.0), n: 1, style: Default::default() }, color: Color32::RED, width: 4.0 });
         let with_item = render(&doc, &doc.base, &RenderOpts::default()).unwrap().region;
         assert!(with_item.contains(pos2(3.0, 50.0)), "counter stays visible: {with_item:?}");
     }
@@ -757,6 +823,37 @@ mod tests {
         assert!(lit.len() > 20, "the mark is drawn: {} pixels", lit.len());
         let (min_x, min_y) = lit.iter().fold((60, 60), |(mx, my), &(x, y)| (mx.min(x), my.min(y)));
         assert!(min_x > 30 && min_y > 30, "bottom right by default, got {min_x},{min_y}");
+    }
+
+    #[test]
+    fn commentary_adds_a_band_under_the_image() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(40, 20, image::Rgba([10, 10, 10, 255])));
+        // No filled entry, no band.
+        doc.commentary = Some(Commentary::default());
+        assert_eq!(flatten(&doc).unwrap().dimensions(), (40, 20));
+        let mut commentary = Commentary { size: 10.0, padding: 6.0, ..Default::default() };
+        commentary.entries.push(crate::model::CommentEntry { n: 1, text: "first step".into() });
+        doc.commentary = Some(commentary);
+        let out = flatten(&doc).unwrap();
+        assert_eq!(out.width(), 40);
+        assert!(out.height() > 20, "the band grew the image: {out:?}");
+        let band = out.get_pixel(2, out.height() - 2).0;
+        assert_eq!(band, [28, 28, 30, 255], "band colour fills the strip");
+        assert_eq!(out.get_pixel(2, 2).0, [10, 10, 10, 255], "the image itself is untouched");
+    }
+
+    #[test]
+    fn long_commentary_wraps_to_the_band_width() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(120, 20, image::Rgba([10, 10, 10, 255])));
+        let mut commentary =
+            Commentary { size: 10.0, padding: 4.0, entries: vec![crate::model::CommentEntry { n: 1, text: "short".into() }], ..Default::default() };
+        doc.commentary = Some(commentary.clone());
+        let single = crate::render::output_size(&doc, &RenderOpts::default()).y;
+        commentary.entries[0].text = "a much longer remark that cannot fit on one line of this narrow image".into();
+        doc.commentary = Some(commentary);
+        let wrapped = crate::render::output_size(&doc, &RenderOpts::default()).y;
+        assert!(wrapped > single + 8.0, "the wrapped band is taller: {wrapped} vs {single}");
+        assert_eq!(flatten(&doc).unwrap().width(), 120, "wrapping never widens the image");
     }
 
     #[test]

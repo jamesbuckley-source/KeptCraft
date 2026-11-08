@@ -203,6 +203,9 @@ pub struct KeptSettings {
 pub struct Preset {
     pub name: String,
     pub background: Background,
+    /// Numbered-step settings: a preset brings back the counter look as well as the background.
+    #[serde(default)]
+    pub counter: Option<shotcraft_doc::model::CounterStyle>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -427,6 +430,22 @@ mod tests {
         let merged = merge_changes(disk, &base, &edited).unwrap();
         assert_eq!(merged.upload.url, "https://example.test/upload");
         assert_eq!(merged.palette.last(), Some(&[1, 2, 3, 255]));
+    }
+
+    #[test]
+    fn presets_carry_the_counter_look_and_old_ones_still_load() {
+        use shotcraft_doc::model::{CounterLabel, CounterStyle};
+        let style = CounterStyle { size: 36.0, label: CounterLabel::Letters, ..Default::default() };
+        let preset = Preset { name: "Talk".into(), background: Background::default(), counter: Some(style.clone()) };
+        let json = serde_json::to_string(&preset).unwrap();
+        let back: Preset = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.counter, Some(style), "the preset brings the counter look back");
+
+        // A preset saved before counters had presets carries no `counter` key at all.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.as_object_mut().is_some_and(|o| o.remove("counter").is_some()), "the key is there to drop");
+        let old: Preset = serde_json::from_value(value).unwrap();
+        assert_eq!(old.counter, None, "an old preset loads with the default counter style");
     }
 
     #[cfg(unix)]

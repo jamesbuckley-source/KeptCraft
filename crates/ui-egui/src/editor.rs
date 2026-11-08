@@ -19,8 +19,8 @@ use image::RgbaImage;
 use shotcraft_engine::config::{ExportFormat, Preset, Settings, State};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
-    Anchor, ArrowStyle, Aspect, Background, BgFill, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle,
-    Watermark, constrain_aspect,
+    Anchor, ArrowStyle, Aspect, Background, BgFill, Commentary, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item, Orient, OwnedGradient,
+    PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -167,6 +167,8 @@ struct Editor {
     text_size: f32,
     /// New text wraps at the image's right edge instead of running off it.
     text_paragraph: bool,
+    /// Defaults for new numbered steps, including the ones a preset restores.
+    counter_style: CounterStyle,
     redact_mode: RedactMode,
     spotlight_ellipse: bool,
     selected: Option<usize>,
@@ -231,6 +233,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         text_style: TextStyle::Plain,
         text_size: 32.0,
         text_paragraph: false,
+        counter_style: CounterStyle::default(),
         redact_mode: RedactMode::Pixelate,
         spotlight_ellipse: false,
         selected: None,
@@ -1091,6 +1094,52 @@ impl Editor {
                     }
                 });
             }
+            Tool::Counter => {
+                let mut style = self.counter_style.clone();
+                let mut changed = false;
+                let label = match style.label {
+                    CounterLabel::Numbers => "123",
+                    CounterLabel::Letters => "abc",
+                };
+                egui::ComboBox::from_id_salt("counter-label").selected_text(label).width(64.0).show_ui(ui, |ui| {
+                    for kind in [CounterLabel::Numbers, CounterLabel::Letters] {
+                        let text = match kind {
+                            CounterLabel::Numbers => "123",
+                            CounterLabel::Letters => "abc",
+                        };
+                        if ui.selectable_label(style.label == kind, text).clicked() {
+                            style.label = kind;
+                            changed = true;
+                        }
+                    }
+                });
+                changed |= ui.add(egui::DragValue::new(&mut style.size).range(14.0..=160.0).suffix(" px").speed(0.5)).on_hover_text("Diameter").changed();
+                changed |= ui.add(egui::Slider::new(&mut style.padding, 0.0..=0.5).show_value(false)).on_hover_text("Padding around the label").changed();
+                changed |= ui.add(egui::Slider::new(&mut style.shadow, 0.0..=1.0).show_value(false)).on_hover_text("Drop shadow").changed();
+                let mut ring = style.outline.unwrap_or(self.color);
+                if ui.color_edit_button_srgba(&mut ring).on_hover_text("Ring colour").changed() {
+                    style.outline = Some(ring);
+                    changed = true;
+                }
+                if ui.selectable_label(style.outline.is_some(), "Ring").on_hover_text("Turn the ring off").clicked() {
+                    style.outline = style.outline.is_none().then_some(ring);
+                    changed = true;
+                }
+                if style.outline.is_some() {
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut style.outline_width).range(0.0..=20.0).suffix(" px").speed(0.2))
+                        .on_hover_text("Ring thickness")
+                        .changed();
+                }
+                if changed {
+                    self.counter_style = style.clone();
+                    self.restyle_selected(|it| {
+                        if let Shape::Counter { style: s, .. } = &mut it.shape {
+                            *s = style.clone();
+                        }
+                    });
+                }
+            }
             Tool::Redact => {
                 let modes = [
                     (RedactMode::Pixelate, "Pixelate"),
@@ -1136,8 +1185,12 @@ impl Editor {
                 for (i, name) in names.iter().enumerate() {
                     if ui.selectable_label(false, name).clicked() {
                         let bg = self.settings.presets[i].background.clone();
+                        let counter = self.settings.presets[i].counter.clone();
                         self.checkpoint();
                         self.doc.background = Some(bg);
+                        if let Some(counter) = counter {
+                            self.counter_style = counter;
+                        }
                         self.touch();
                     }
                 }
@@ -1166,9 +1219,10 @@ impl Editor {
                 && let Some(background) = self.doc.background.clone()
             {
                 let name = self.preset_name.trim().to_owned();
+                let counter = self.counter_style.clone();
                 let saved = self.update_settings(|s| {
                     s.presets.retain(|p| p.name != name);
-                    s.presets.push(Preset { name, background });
+                    s.presets.push(Preset { name, background, counter: Some(counter) });
                 });
                 if saved {
                     self.preset_name.clear();
@@ -1454,6 +1508,54 @@ impl Editor {
         }
     }
 
+    /// The band under the image: one comment per numbered step, with the strip's own colours.
+    fn commentary_panel(&mut self, ui: &mut egui::Ui) {
+        let counters: Vec<(u32, String)> = self
+            .doc
+            .items
+            .iter()
+            .filter_map(|item| match &item.shape {
+                Shape::Counter { n, style, .. } => Some((*n, style.label_for(*n))),
+                _ => None,
+            })
+            .collect();
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            let mut on = self.doc.commentary.is_some();
+            if ui.checkbox(&mut on, "Commentary under the image").on_hover_text("One line per numbered step, added below it").changed() {
+                self.checkpoint();
+                self.doc.commentary = on.then(Commentary::default);
+                changed = true;
+            }
+            if counters.is_empty() {
+                ui.label(RichText::new("Place a numbered step to describe it here").color(ui.visuals().weak_text_color()));
+            }
+            if let Some(c) = &mut self.doc.commentary {
+                changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
+                ui.label("Text");
+                changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
+                ui.label("Padding");
+                changed |= ui.add(egui::DragValue::new(&mut c.padding).range(0.0..=120.0).suffix(" px")).changed();
+            }
+        });
+        if let Some(c) = &mut self.doc.commentary {
+            egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
+                for (n, label) in &counters {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).strong());
+                        let width = (ui.available_width() - 8.0).max(80.0);
+                        if ui.add(egui::TextEdit::singleline(c.entry_mut(*n)).hint_text("comment").desired_width(width)).changed() {
+                            changed = true;
+                        }
+                    });
+                }
+            });
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
     fn set_fill(&mut self, fill: BgFill) {
         self.checkpoint();
         let mut bg = self.doc.background.clone().unwrap_or_default();
@@ -1649,7 +1751,7 @@ impl Editor {
                 Tool::Counter => {
                     self.checkpoint();
                     let n = self.doc.next_counter();
-                    let item = self.new_item(Shape::Counter { center: b, n });
+                    let item = self.new_item(Shape::Counter { center: b, n, style: self.counter_style.clone() });
                     self.doc.items.push(item);
                     self.selected = Some(self.doc.items.len() - 1);
                     self.touch();
@@ -2042,6 +2144,9 @@ impl eframe::App for Editor {
             });
         }
         egui::Panel::bottom("status").exact_size(32.0).show(root, |ui| self.status_bar(ui));
+        if self.tool == Tool::Counter && self.crop.is_none() {
+            egui::Panel::bottom("commentary").show(root, |ui| self.commentary_panel(ui));
+        }
         if self.show_background && self.crop.is_none() {
             egui::Panel::left("background").exact_size(232.0).resizable(false).show(root, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.background_panel(ui));

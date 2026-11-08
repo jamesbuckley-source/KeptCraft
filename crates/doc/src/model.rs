@@ -169,14 +169,90 @@ pub struct CommentEntry {
     /// Stretches of `text` drawn bold or italic.
     #[serde(default)]
     pub spans: Vec<TextSpan>,
-    /// Start each typed line with a bullet.
-    #[serde(default)]
-    pub bullet: bool,
 }
+
+/// The mark put in front of a bulleted line.
+pub const BULLET: &str = "• ";
 
 impl CommentEntry {
     pub fn new(n: u32, text: impl Into<String>) -> Self {
-        Self { n, text: text.into(), spans: Vec::new(), bullet: false }
+        Self { n, text: text.into(), spans: Vec::new() }
+    }
+
+    /// Bullet or unbullet every line the char range `from..to` touches; a collapsed range means
+    /// the line the caret sits on. Saying whether the selection covered any line.
+    pub fn toggle_bullets(&mut self, from: usize, to: usize) -> bool {
+        let chars: Vec<char> = self.text.chars().collect();
+        let len = chars.len();
+        let start = from.min(len);
+        let end = to.min(len).max(start);
+        let mut starts = vec![0];
+        starts.extend(chars.iter().enumerate().filter(|(_, c)| **c == '\n').map(|(i, _)| i + 1));
+        let mut lines: Vec<usize> =
+            starts.iter().enumerate().filter(|(k, s)| starts.get(k + 1).copied().unwrap_or(len + 1) > start && **s <= end).map(|(_, s)| *s).collect();
+        if lines.is_empty() {
+            // A caret at the very end belongs to the last line.
+            match starts.last() {
+                Some(last) => lines.push(*last),
+                None => return false,
+            }
+        }
+        let mark: Vec<char> = BULLET.chars().collect();
+        let bulleted = |at: usize| chars.len() >= at + mark.len() && chars.get(at..at + mark.len()) == Some(&mark[..]);
+        let all = lines.iter().all(|at| bulleted(*at));
+        // Last line first, so the lines before it keep their places.
+        for at in lines.iter().rev() {
+            if all {
+                if bulleted(*at) {
+                    self.splice(*at..*at + mark.len(), "");
+                }
+            } else if !bulleted(*at) {
+                self.splice(*at..*at, BULLET);
+            }
+        }
+        true
+    }
+
+    /// Keep the spans on their characters after the box turned `old` into what is there now.
+    pub fn realign(&mut self, old: &str) {
+        let old: Vec<char> = old.chars().collect();
+        let new: Vec<char> = self.text.chars().collect();
+        let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let room = old.len().min(new.len()).saturating_sub(prefix);
+        let suffix = (0..room).take_while(|k| old[old.len() - 1 - k] == new[new.len() - 1 - k]).count();
+        let removed = old.len() - prefix - suffix;
+        let added = new.len() - prefix - suffix;
+        self.shift_spans(prefix, prefix + removed, added);
+    }
+
+    /// Replace the chars in `range` with `with`, moving the spans with the text.
+    fn splice(&mut self, range: std::ops::Range<usize>, with: &str) {
+        let mut chars: Vec<char> = self.text.chars().collect();
+        let start = range.start.min(chars.len());
+        let end = range.end.min(chars.len()).max(start);
+        let added = with.chars().count();
+        chars.splice(start..end, with.chars());
+        self.text = chars.into_iter().collect();
+        self.shift_spans(start, end, added);
+    }
+
+    /// Move every span for an edit that replaced `start..end` with `added` characters.
+    fn shift_spans(&mut self, start: usize, end: usize, added: usize) {
+        let delta = added as isize - (end - start) as isize;
+        let shift = |at: usize| -> usize {
+            if at >= end {
+                (at as isize + delta).max(0) as usize
+            } else if at > start {
+                start + added
+            } else {
+                at
+            }
+        };
+        self.spans.retain_mut(|span| {
+            span.start = shift(span.start);
+            span.end = shift(span.end);
+            span.start < span.end
+        });
     }
 
     /// The style covering character `at`, if any.
@@ -1209,5 +1285,32 @@ mod tests {
             width: 4.0,
         });
         assert_eq!(doc.next_counter(), 5);
+    }
+
+    #[test]
+    fn bullets_mark_only_the_lines_you_chose() {
+        let mut entry = CommentEntry::new(1, "first\nsecond\nthird");
+        assert!(entry.toggle_bullets(6, 6));
+        assert_eq!(entry.text, "first\n• second\nthird", "only the line under the caret is bulleted");
+
+        let all = entry.text.chars().count();
+        assert!(entry.toggle_bullets(0, all));
+        assert_eq!(entry.text, "• first\n• second\n• third", "a selection over every line bullets them all");
+
+        assert!(entry.toggle_bullets(0, entry.text.chars().count()));
+        assert_eq!(entry.text, "first\nsecond\nthird", "pressing again clears the bullets");
+    }
+
+    #[test]
+    fn styled_spans_follow_bullets_and_typing() {
+        let mut entry = CommentEntry::new(1, "second line");
+        entry.style_range(0..6, Some(true), None);
+        assert!(entry.toggle_bullets(0, 0));
+        assert_eq!(entry.text, "• second line");
+        assert_eq!(entry.style_at(2), (true, false), "the bold words move along with the bullet");
+
+        entry.text.insert(0, 'x');
+        entry.realign("• second line");
+        assert_eq!(entry.style_at(3), (true, false), "typing in front shifts the span too");
     }
 }

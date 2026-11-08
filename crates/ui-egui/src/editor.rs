@@ -20,7 +20,7 @@ use shotcraft_engine::config::{ExportFormat, Preset, Settings, State, default_pa
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
     Anchor, ArrowStyle, Aspect, Background, BgFill, CommentEntry, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item,
-    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
+    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextSpan, TextStyle, Watermark, constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -48,6 +48,8 @@ enum Tool {
 /// Zoom bounds: 10 % of the fit and 16× it, the same range the slider and the shortcuts use.
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 16.0;
+/// How long the zoom must stand still before the canvas is rendered at its new size, in seconds.
+const ZOOM_RENDER_DELAY: f64 = 0.09;
 
 /// Room the background panel opens at: wide enough for a preset name and its two buttons.
 const BACKGROUND_WIDTH: f32 = 272.0;
@@ -237,7 +239,13 @@ struct Editor {
     view: View,
     tex: Option<TextureHandle>,
     render_key: Option<(u64, u32)>,
+    /// When the zoom last moved, and whether it has moved since the last frame.
+    zoom_settled_at: f64,
+    zoom_moved: bool,
     base_cache: Option<(u32, RgbaImage)>,
+    /// The rendered output size, kept between frames: laying the band out is not free and the
+    /// zoom asks for it every frame.
+    size_cache: Option<((u64, bool, bool), Vec2)>,
     revision: u64,
     saved_revision: u64,
     status: Option<(String, Instant)>,
@@ -330,7 +338,10 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         view: View::default(),
         tex: None,
         render_key: None,
+        zoom_settled_at: 0.0,
+        zoom_moved: false,
         base_cache: None,
+        size_cache: None,
         revision: 0,
         saved_revision: 0,
         status: None,
@@ -781,6 +792,7 @@ impl Editor {
             self.pan = zoomed_pan(self.pan, self.view.img_rect.center() - self.pan, p, factor);
         }
         self.zoom = zoom;
+        self.zoom_moved = true;
     }
 
     fn zoom_by(&mut self, factor: f32) {
@@ -795,7 +807,15 @@ impl Editor {
             ignore_crop: crop_mode,
             background: self.show_background || self.doc.background.is_some(),
         };
-        let full = render::output_size(&self.doc, &opts(1.0));
+        let size_key = (self.revision, crop_mode, self.show_background || self.doc.background.is_some());
+        let full = match self.size_cache {
+            Some((key, size)) if key == size_key => size,
+            _ => {
+                let size = render::output_size(&self.doc, &opts(1.0));
+                self.size_cache = Some((size_key, size));
+                size
+            }
+        };
         let ppp = ctx.pixels_per_point();
         let fit = ((canvas.width() - 48.0) / full.x).min((canvas.height() - 48.0) / full.y).min(1.0 / ppp).max(0.01);
         let points_per_out1 = fit * self.zoom;
@@ -803,7 +823,19 @@ impl Editor {
         let scale = (points_per_out1 * ppp).min(1.0);
         let scale_key = (scale * 1000.0).round() as u32;
         let key = (self.revision, scale_key);
-        if self.render_key != Some(key) || self.tex.is_none() {
+        let now = ctx.input(|i| i.time);
+        if std::mem::take(&mut self.zoom_moved) {
+            self.zoom_settled_at = now;
+        }
+        // While the zoom is still moving the picture already on the GPU is simply rescaled, which
+        // is free; the render at the new size waits for the wheel to stop. A 4K capture otherwise
+        // re-renders on every wheel notch and the zoom stutters.
+        let edited = self.render_key.is_none_or(|(rev, _)| rev != self.revision);
+        let settled = now - self.zoom_settled_at >= ZOOM_RENDER_DELAY;
+        let wanted = self.render_key != Some(key) || self.tex.is_none();
+        if wanted && !edited && self.tex.is_some() && !settled {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        } else if wanted {
             let base = match &self.base_cache {
                 Some((k, scaled)) if *k == scale_key => scaled,
                 _ => {
@@ -873,6 +905,7 @@ impl Editor {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else if pressed(Key::Num0) {
                 self.zoom = 1.0;
+                self.zoom_moved = true;
                 self.pan = Vec2::ZERO;
             } else if pressed(Key::Plus) || pressed(Key::Equals) {
                 self.zoom_by(1.25);
@@ -1083,6 +1116,7 @@ impl Editor {
             }
             if tiny_button(ui, icon::ARROWS_CLOCKWISE, "Fit to the window (Ctrl/Cmd+0)") {
                 self.zoom = 1.0;
+                self.zoom_moved = true;
                 self.pan = Vec2::ZERO;
             }
         });
@@ -1976,14 +2010,14 @@ impl Editor {
         true
     }
 
-    /// Turn bullets on or off for the step whose box had focus.
-    fn toggle_bullet(&mut self, c: &mut Commentary) -> bool {
+    /// Bullet or unbullet the lines the selection in the focused comment box touches.
+    fn toggle_bullets(&mut self, c: &mut Commentary) -> bool {
         let Some(n) = self.comment_focus else { return false };
         let Some(entry) = c.entries.iter_mut().find(|e| e.n == n) else {
             return false;
         };
-        entry.bullet = !entry.bullet;
-        true
+        let (from, to) = self.comment_selection.filter(|(sel, ..)| *sel == n).map_or((0, 0), |(_, from, to)| (from, to));
+        entry.toggle_bullets(from, to)
     }
 
     /// The comment panel on the right: the band's look, then the steps and their formatting.
@@ -2091,8 +2125,11 @@ impl Editor {
             {
                 changed = true;
             }
-            if ui.add_enabled(self.comment_focus.is_some(), egui::Button::new("•")).on_hover_text("Bullet the lines of the comment you are editing").clicked()
-                && self.toggle_bullet(&mut c)
+            if ui
+                .add_enabled(self.comment_focus.is_some(), egui::Button::new("•"))
+                .on_hover_text("Bullet the lines you have selected in the comment you are editing")
+                .clicked()
+                && self.toggle_bullets(&mut c)
             {
                 changed = true;
             }
@@ -2148,13 +2185,27 @@ impl Editor {
                     }
                 }
             });
-            // As tall as its text, up to ten lines, then it scrolls.
+            // As tall as its text, up to ten lines, then it scrolls. The rich-text layouter shows
+            // the bold and italic the comment carries.
             let mut focused = false;
             let mut selection = None;
+            let spans = c.entries[idx].spans.clone();
+            let before = c.entries[idx].text.clone();
             egui::ScrollArea::vertical().id_salt(("comment-scroll", *n)).max_height(ten_lines).auto_shrink([false, true]).show(ui, |ui| {
                 let width = ui.available_width();
-                let output = egui::TextEdit::multiline(&mut c.entries[idx].text).hint_text("comment").desired_width(width).desired_rows(1).show(ui);
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    let job = comment_job(ui, buf.as_str(), &spans, wrap);
+                    ui.ctx().fonts_mut(|f| f.layout_job(job))
+                };
+                let output = egui::TextEdit::multiline(&mut c.entries[idx].text)
+                    .hint_text("comment")
+                    .desired_width(width)
+                    .desired_rows(1)
+                    .layouter(&mut layouter)
+                    .show(ui);
                 if output.response.changed() {
+                    // The styled spans follow the characters they were put on.
+                    c.entries[idx].realign(&before);
                     changed = true;
                 }
                 focused = output.response.has_focus();
@@ -2423,14 +2474,16 @@ impl Editor {
             }
         }
 
-        // Hover cursor feedback.
-        if let Some(p) = resp.hover_pos() {
+        // Hover cursor feedback. Moving the canvas always reads as a hand, never the four-arrow
+        // move cursor an item under the pointer would otherwise ask for.
+        let middle_down = ctx.input(|i| i.pointer.middle_down());
+        if middle_down || (self.hand() && resp.dragged()) {
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if let Some(p) = resp.hover_pos() {
             let b = view.to_base(p);
             let over_handle = self.selected.and_then(|i| self.doc.items.get(i)).is_some_and(|it| it.handles().iter().any(|h| h.distance(b) <= tol * 1.5));
-            let icon = if over_handle {
+            let icon = if over_handle || self.hand() {
                 egui::CursorIcon::Grab
-            } else if self.hand() {
-                if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
             } else if self.tool == Tool::Select {
                 if self.doc.items.iter().any(|it| it.hit(b, tol)) { egui::CursorIcon::Move } else { egui::CursorIcon::Default }
             } else if self.tool == Tool::Text {
@@ -2738,6 +2791,30 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(8.0);
     ui.label(RichText::new(title).strong());
     ui.add_space(2.0);
+}
+
+/// Lay a comment out the way the band draws it, so its box shows the bold and italic it carries.
+fn comment_job(ui: &egui::Ui, text: &str, spans: &[TextSpan], wrap_width: f32) -> egui::text::LayoutJob {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let bold_family = egui::FontFamily::Name(fonts::ANNOTATION_FAMILY.into());
+    let color = ui.visuals().text_color();
+    let style_at = |at: usize| spans.iter().find(|s| at >= s.start && at < s.end).map_or((false, false), |s| (s.bold, s.italic));
+    let chars: Vec<char> = text.chars().collect();
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+    let mut i = 0;
+    while i < chars.len() {
+        let style = style_at(i);
+        let mut j = i + 1;
+        while j < chars.len() && style_at(j) == style {
+            j += 1;
+        }
+        let run: String = chars[i..j].iter().collect();
+        let font_id = if style.0 { egui::FontId::new(body.size, bold_family.clone()) } else { body.clone() };
+        job.append(&run, 0.0, egui::TextFormat { font_id, color, italics: style.1, ..Default::default() });
+        i = j;
+    }
+    job
 }
 
 /// A small dial for a shadow direction: click or drag inside it to point the shadow.

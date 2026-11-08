@@ -100,7 +100,7 @@ struct BandStep {
     color: Color32,
     /// The badge's radius, roomier for a longer label.
     badge_r: f32,
-    /// The text as shown (bullets included), and where each wrapped line starts in it.
+    /// The text as shown, and where each wrapped line starts in it.
     lines: Vec<(String, usize)>,
     spans: Vec<crate::model::TextSpan>,
 }
@@ -129,38 +129,13 @@ struct BandLayout {
     gap: f32,
 }
 
-/// The text of one step as the band shows it, bulleted when the step asks for bullets. The spans
-/// move with the bullets so styling survives them.
+/// The text of one step as the band shows it: what was typed, minus trailing space, with the
+/// spans kept on their characters.
 fn commentary_text(entry: &crate::model::CommentEntry) -> (String, Vec<crate::model::TextSpan>) {
-    let src = entry.text.trim();
-    if !entry.bullet {
-        return (src.to_owned(), entry.spans.clone());
-    }
-    let mut text = String::new();
-    // Where each source line starts, and where it lands once its bullet is in front.
-    let mut starts: Vec<(usize, usize)> = Vec::new();
-    let mut src_at = 0;
-    let mut out_at = 0;
-    for (i, line) in src.lines().enumerate() {
-        if i > 0 {
-            text.push('\n');
-            out_at += 1;
-        }
-        let bullet = "•  ";
-        text.push_str(bullet);
-        starts.push((src_at, out_at + bullet.chars().count()));
-        let len = line.chars().count();
-        text.push_str(line);
-        src_at += len + 1;
-        out_at += bullet.chars().count() + len;
-    }
-    let moved = |at: usize| -> usize {
-        match starts.iter().rev().find(|(src_line, _)| *src_line <= at) {
-            Some((src_line, out_line)) => out_line + (at - src_line),
-            None => at,
-        }
-    };
-    let spans = entry.spans.iter().map(|s| crate::model::TextSpan { start: moved(s.start), end: moved(s.end), ..*s }).collect();
+    let text = entry.text.trim_end().to_owned();
+    let len = text.chars().count();
+    let spans =
+        entry.spans.iter().filter(|s| s.start < len).map(|s| crate::model::TextSpan { end: s.end.min(len), ..*s }).filter(|s| s.start < s.end).collect();
     (text, spans)
 }
 

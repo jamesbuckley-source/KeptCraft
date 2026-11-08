@@ -900,65 +900,71 @@ impl Editor {
         });
     }
 
-    /// The popup behind the + tile in the plain-colour row: build a gradient from any number of
-    /// stops, preview it, then keep it beside the built-in gradients.
-    fn gradient_popup(&mut self, ui: &mut egui::Ui, anchor: &egui::Response) {
-        let popup_id = ui.id().with("gradient-editor");
-        egui::Popup::from_toggle_button_response(anchor).id(popup_id).show(|ui| {
-            ui.set_min_width(300.0);
-            ui.label(RichText::new("Custom gradient").strong());
-            let mut draft = self.gradient_draft.take().unwrap_or_else(|| OwnedGradient {
-                angle: 135.0,
-                stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
-            });
-            let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-            paint_stops(ui.painter(), preview, draft.angle, |t| swatch_color(draft.color_at(t)));
-            ui.add_space(4.0);
-            let mut remove = None;
-            for i in 0..draft.stops.len() {
+    /// The gradient editor behind the + tile. It is a window rather than a popup: the colour picker
+    /// is itself a popup, and a click in it would count as "outside" and close a popup host.
+    fn gradient_window(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.gradient_draft.take() else { return };
+        let mut open = true;
+        let mut added = None;
+        let mut cancelled = false;
+        egui::Window::new("Custom gradient")
+            .id(egui::Id::new("gradient-editor"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+                paint_stops(ui.painter(), preview, draft.angle, |t| swatch_color(draft.color_at(t)));
+                ui.add_space(4.0);
+                let mut remove = None;
+                for i in 0..draft.stops.len() {
+                    ui.horizontal(|ui| {
+                        let mut colour = swatch_color(draft.stops[i].color);
+                        if ui.color_edit_button_srgba(&mut colour).changed() {
+                            draft.stops[i].color = colour.to_array();
+                        }
+                        let mut percent = draft.stops[i].at * 100.0;
+                        if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).suffix("%").speed(1.0)).changed() {
+                            draft.stops[i].at = percent / 100.0;
+                        }
+                        if draft.stops.len() > 2 && ui.small_button(icon::X).on_hover_text("Remove this colour").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    draft.stops.remove(i);
+                }
+                let last = draft.sorted_stops().last().copied().unwrap_or(GradientStop { at: 1.0, color: [255, 255, 255, 255] });
+                if ui.small_button(format!("{}  Add colour", icon::PLUS)).clicked() {
+                    draft.stops.push(GradientStop { at: 1.0, color: last.color });
+                }
                 ui.horizontal(|ui| {
-                    let mut colour = swatch_color(draft.stops[i].color);
-                    if ui.color_edit_button_srgba(&mut colour).changed() {
-                        draft.stops[i].color = colour.to_array();
+                    ui.label("Angle");
+                    ui.add(egui::DragValue::new(&mut draft.angle).range(0.0..=360.0).suffix("°").speed(1.0));
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Add to gradients").clicked() {
+                        added = Some(draft.clone());
                     }
-                    let mut percent = draft.stops[i].at * 100.0;
-                    if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).suffix("%").speed(1.0)).changed() {
-                        draft.stops[i].at = percent / 100.0;
-                    }
-                    if draft.stops.len() > 2 && ui.small_button(icon::X).on_hover_text("Remove this colour").clicked() {
-                        remove = Some(i);
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
                     }
                 });
-            }
-            if let Some(i) = remove {
-                draft.stops.remove(i);
-            }
-            let last = draft.sorted_stops().last().copied().unwrap_or(GradientStop { at: 1.0, color: [255, 255, 255, 255] });
-            if ui.small_button(format!("{}  Add colour", icon::PLUS)).clicked() {
-                draft.stops.push(GradientStop { at: 1.0, color: last.color });
-            }
-            ui.horizontal(|ui| {
-                ui.label("Angle");
-                ui.add(egui::DragValue::new(&mut draft.angle).range(0.0..=360.0).suffix("°").speed(1.0));
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("Add to gradients").clicked() {
-                    let gradient = draft.clone();
-                    if let Ok(settings) = Settings::update(|s| s.gradients.push(gradient.clone())) {
-                        self.settings = settings;
-                    }
-                    self.set_fill(BgFill::Custom(Box::new(gradient)));
-                    self.gradient_draft = None;
-                    ui.close();
-                } else if ui.button("Cancel").clicked() {
-                    self.gradient_draft = None;
-                    ui.close();
-                } else {
-                    self.gradient_draft = Some(draft);
-                }
-            });
-        });
+        if let Some(gradient) = added {
+            if let Ok(settings) = Settings::update(|s| s.gradients.push(gradient.clone())) {
+                self.settings = settings;
+            }
+            self.set_fill(BgFill::Custom(Box::new(gradient)));
+            self.gradient_draft = None;
+        } else if cancelled || !open {
+            self.gradient_draft = None;
+        } else {
+            self.gradient_draft = Some(draft);
+        }
     }
 
     fn style_controls(&mut self, ui: &mut egui::Ui) {
@@ -1243,7 +1249,12 @@ impl Editor {
             let (r, plus) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
             ui.painter().rect_stroke(r, 6, Stroke::new(1.5, ui.visuals().widgets.inactive.fg_stroke.color), StrokeKind::Inside);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(14.0), ui.visuals().widgets.inactive.fg_stroke.color);
-            self.gradient_popup(ui, &plus);
+            if plus.on_hover_text("Build a gradient").clicked() {
+                self.gradient_draft = Some(OwnedGradient {
+                    angle: 135.0,
+                    stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
+                });
+            }
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -1993,6 +2004,8 @@ impl eframe::App for Editor {
             });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(root, |ui| self.canvas(ui));
+
+        self.gradient_window(ctx);
 
         if self.confirm_close {
             egui::Modal::new(egui::Id::new("confirm-close")).show(ctx, |ui| {

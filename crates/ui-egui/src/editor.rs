@@ -30,6 +30,8 @@ use crate::{dialogs, theme};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tool {
     Select,
+    /// Drag the canvas around: the hand in the toolbar, or Space held down.
+    Pan,
     Rect,
     FilledRect,
     Ellipse,
@@ -42,6 +44,10 @@ enum Tool {
     Redact,
     Spotlight,
 }
+
+/// Zoom bounds: 10 % of the fit and 16× it, the same range the slider and the shortcuts use.
+const MIN_ZOOM: f32 = 0.1;
+const MAX_ZOOM: f32 = 16.0;
 
 const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
     (Tool::Select, theme::ToolIcon::Glyph(icon::CURSOR), "Select (V)", Key::V),
@@ -158,6 +164,8 @@ struct Editor {
     recent: Vec<PathBuf>,
     /// The gradient being built in the background panel's popup, while it is open.
     gradient_draft: Option<OwnedGradient>,
+    /// Which of the user's gradients the draft rewrites, when it was opened from a tile.
+    gradient_edit: Option<usize>,
     settings: Settings,
     tool: Tool,
     color: Color32,
@@ -179,6 +187,8 @@ struct Editor {
     redo: Vec<Snapshot>,
     zoom: f32,
     pan: Vec2,
+    /// Space held: a temporary hand, so a drag moves the canvas instead of drawing.
+    space_down: bool,
     show_background: bool,
     crop: Option<CropState>,
     picking_color: bool,
@@ -194,6 +204,8 @@ struct Editor {
     confirm_close: bool,
     allow_close: bool,
     preset_name: String,
+    /// The preset last loaded or saved, so a tweak can be written back to it.
+    preset_active: Option<String>,
 }
 
 /// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
@@ -225,6 +237,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         save_target,
         recent,
         gradient_draft: None,
+        gradient_edit: None,
         settings,
         tool: Tool::Arrow,
         color,
@@ -244,6 +257,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         redo: Vec::new(),
         zoom: 1.0,
         pan: Vec2::ZERO,
+        space_down: false,
         show_background,
         crop: None,
         picking_color: false,
@@ -259,6 +273,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         confirm_close: false,
         allow_close: false,
         preset_name: String::new(),
+        preset_active: None,
     })
 }
 
@@ -613,7 +628,7 @@ impl Editor {
             Tool::Highlighter => Shape::Highlighter { pts: vec![b] },
             Tool::Redact => Shape::Redact { rect: r, mode: self.redact_mode, seed: rand_seed() },
             Tool::Spotlight => Shape::Spotlight { rect: r, ellipse: self.spotlight_ellipse },
-            Tool::Select | Tool::Text | Tool::Counter => return None,
+            Tool::Select | Tool::Pan | Tool::Text | Tool::Counter => return None,
         })
     }
 
@@ -678,6 +693,29 @@ impl Editor {
         self.crop = None;
     }
 
+    /// True while a drag should move the canvas: the hand tool, or Space held down.
+    fn hand(&self) -> bool {
+        self.tool == Tool::Pan || self.space_down
+    }
+
+    /// Zoom to `zoom`, keeping the base pixel under `anchor` where it is on screen.
+    fn zoom_to(&mut self, zoom: f32, anchor: Option<Pos2>) {
+        let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        let factor = zoom / self.zoom;
+        if (factor - 1.0).abs() < 1e-4 {
+            return;
+        }
+        // `img_rect` is the image as drawn last frame, so its centre is the canvas centre plus the pan.
+        if let Some(p) = anchor.filter(|_| self.view.img_rect.width() > 0.0) {
+            self.pan = zoomed_pan(self.pan, self.view.img_rect.center() - self.pan, p, factor);
+        }
+        self.zoom = zoom;
+    }
+
+    fn zoom_by(&mut self, factor: f32) {
+        self.zoom_to(self.zoom * factor, None);
+    }
+
     fn render_if_needed(&mut self, ctx: &egui::Context, canvas: Rect) {
         let crop_mode = self.crop.is_some();
         let opts = |scale: f32| RenderOpts {
@@ -732,6 +770,10 @@ impl Editor {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // Space is a temporary hand: hold it to move the canvas, let go to get the tool back.
+        // While a text field has the keyboard it is just a space.
+        let typing = self.editing.is_some() || ctx.text_edit_focused();
+        self.space_down = !typing && ctx.input(|i| i.key_down(Key::Space));
         if self.editing.is_some() {
             if ctx.input(|i| i.key_pressed(Key::Escape)) {
                 self.commit_text();
@@ -762,9 +804,9 @@ impl Editor {
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
             } else if pressed(Key::Plus) || pressed(Key::Equals) {
-                self.zoom = (self.zoom * 1.25).min(16.0);
+                self.zoom_by(1.25);
             } else if pressed(Key::Minus) {
-                self.zoom = (self.zoom / 1.25).max(0.1);
+                self.zoom_by(1.0 / 1.25);
             }
             return;
         }
@@ -839,6 +881,12 @@ impl Editor {
                 self.toggle_background();
             }
             ui.separator();
+            if theme::tool_button(ui, icon::HAND, None, self.hand() && self.crop.is_none(), false)
+                .on_hover_text("Move the canvas — hold Space, or drag with the middle button")
+                .clicked()
+            {
+                self.select_tool(Tool::Pan);
+            }
             for (tool, ic, tip, _) in TOOLS {
                 if theme::tool_button_icon(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
                     self.select_tool(tool);
@@ -902,18 +950,48 @@ impl Editor {
                         self.undo();
                     }
                 });
+                ui.separator();
+                // The cluster is the last thing added to the row, so it only draws when the tools
+                // and the actions above have left room for it.
+                if ui.available_width() > 132.0 {
+                    self.zoom_control(ui);
+                }
             });
         });
     }
 
-    /// The gradient editor behind the + tile. It is a window rather than a popup: the colour picker
-    /// is itself a popup, and a click in it would count as "outside" and close a popup host.
+    /// Zoom cluster: smaller, a slider you can drag, bigger, and a reset back to the fit.
+    fn zoom_control(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if tiny_button(ui, icon::MINUS, "Zoom out") {
+                self.zoom_by(1.0 / 1.25);
+            }
+            let mut zoom = self.zoom;
+            let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
+            if ui.add_sized([60.0, 16.0], slider).on_hover_text("Zoom").changed() {
+                self.zoom_to(zoom, None);
+            }
+            if tiny_button(ui, icon::PLUS, "Zoom in") {
+                self.zoom_by(1.25);
+            }
+            if tiny_button(ui, icon::ARROWS_CLOCKWISE, "Fit to the window (Ctrl/Cmd+0)") {
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+            }
+        });
+    }
+
+    /// The gradient editor behind the + tile, and behind a double click on one of your own tiles.
+    /// It is a window rather than a popup: the colour picker is itself a popup, and a click in it
+    /// would count as "outside" and close a popup host.
     fn gradient_window(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.gradient_draft.take() else { return };
+        let editing = self.gradient_edit;
         let mut open = true;
         let mut added = None;
         let mut cancelled = false;
-        egui::Window::new("Custom gradient")
+        egui::Window::new(if editing.is_some() { "Edit gradient" } else { "Custom gradient" })
             .id(egui::Id::new("gradient-editor"))
             .collapsible(false)
             .resizable(false)
@@ -952,7 +1030,8 @@ impl Editor {
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Add to gradients").clicked() {
+                    let save = if editing.is_some() { "Update gradient" } else { "Add to gradients" };
+                    if ui.button(save).clicked() {
                         added = Some(draft.clone());
                     }
                     if ui.button("Cancel").clicked() {
@@ -961,13 +1040,32 @@ impl Editor {
                 });
             });
         if let Some(gradient) = added {
-            if let Ok(settings) = Settings::update(|s| s.gradients.push(gradient.clone())) {
-                self.settings = settings;
+            let edited = match editing {
+                Some(i) if self.settings.gradients.get(i).is_some() => Settings::update(|s| {
+                    if let Some(slot) = s.gradients.get_mut(i) {
+                        *slot = gradient.clone();
+                    }
+                })
+                .ok(),
+                _ => None,
+            };
+            match edited {
+                Some(settings) => {
+                    self.settings = settings;
+                    self.flash("Gradient updated");
+                }
+                None => {
+                    if let Ok(settings) = Settings::update(|s| s.gradients.push(gradient.clone())) {
+                        self.settings = settings;
+                    }
+                }
             }
             self.set_fill(BgFill::Custom(Box::new(gradient)));
             self.gradient_draft = None;
+            self.gradient_edit = None;
         } else if cancelled || !open {
             self.gradient_draft = None;
+            self.gradient_edit = None;
         } else {
             self.gradient_draft = Some(draft);
         }
@@ -1205,10 +1303,24 @@ impl Editor {
 
     fn background_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        // Brand presets.
+        // Brand presets: loading one brings back the background and the counter look.
+        let names: Vec<String> = self.settings.presets.iter().map(|p| p.name.clone()).collect();
+        let active = self.preset_active.clone().filter(|name| names.iter().any(|n| n == name));
+        // Anything the user changed since the preset was loaded can be written back to it.
+        let dirty = active.as_ref().is_some_and(|name| {
+            self.settings
+                .presets
+                .iter()
+                .find(|p| &p.name == name)
+                .is_some_and(|p| self.doc.background.as_ref() != Some(&p.background) || p.counter.as_ref() != Some(&self.counter_style))
+        });
         ui.horizontal(|ui| {
-            let names: Vec<String> = self.settings.presets.iter().map(|p| p.name.clone()).collect();
-            egui::ComboBox::from_id_salt("preset").selected_text("Brand preset").width(150.0).show_ui(ui, |ui| {
+            let shown = match &active {
+                Some(name) if dirty => format!("{name} *"),
+                Some(name) => name.clone(),
+                None => "Brand preset".to_owned(),
+            };
+            egui::ComboBox::from_id_salt("preset").selected_text(shown).width(150.0).show_ui(ui, |ui| {
                 for (i, name) in names.iter().enumerate() {
                     if ui.selectable_label(false, name).clicked() {
                         let bg = self.settings.presets[i].background.clone();
@@ -1218,6 +1330,7 @@ impl Editor {
                         if let Some(counter) = counter {
                             self.counter_style = counter;
                         }
+                        self.preset_active = Some(name.clone());
                         self.touch();
                     }
                 }
@@ -1225,6 +1338,25 @@ impl Editor {
                     ui.label(RichText::new("No presets yet").weak());
                 }
             });
+            if ui
+                .add_enabled(dirty, egui::Button::new(icon::FLOPPY_DISK))
+                .on_hover_text("Save these changes into the preset")
+                .on_disabled_hover_text("Load a preset first, then change something")
+                .clicked()
+                && let Some(name) = active.clone()
+                && let Some(background) = self.doc.background.clone()
+            {
+                let counter = self.counter_style.clone();
+                let saved = self.update_settings(|s| {
+                    if let Some(p) = s.presets.iter_mut().find(|p| p.name == name) {
+                        p.background = background;
+                        p.counter = Some(counter);
+                    }
+                });
+                if saved {
+                    self.flash("Preset updated");
+                }
+            }
             ui.menu_button(icon::TRASH, |ui| {
                 let mut remove = None;
                 for p in &self.settings.presets {
@@ -1233,6 +1365,9 @@ impl Editor {
                     }
                 }
                 if let Some(name) = remove {
+                    if self.preset_active.as_deref() == Some(name.as_str()) {
+                        self.preset_active = None;
+                    }
                     self.update_settings(|s| s.presets.retain(|p| p.name != name));
                 }
             })
@@ -1249,24 +1384,24 @@ impl Editor {
                 let counter = self.counter_style.clone();
                 let saved = self.update_settings(|s| {
                     s.presets.retain(|p| p.name != name);
-                    s.presets.push(Preset { name, background, counter: Some(counter) });
+                    s.presets.push(Preset { name: name.clone(), background, counter: Some(counter) });
                 });
                 if saved {
                     self.preset_name.clear();
+                    self.preset_active = Some(name);
                     self.flash("Preset saved");
                 }
             }
         });
-        ui.add_space(4.0);
-        if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(self.doc.background.is_none(), "None")).clicked() {
+        if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(self.doc.background.is_none(), "No background")).clicked() {
             self.checkpoint();
             self.doc.background = None;
             self.touch();
         }
         let fill = self.doc.background.as_ref().map(|b| b.fill.clone());
-        ui.add_space(4.0);
-        ui.label(RichText::new("Gradients").strong());
+        section(ui, "Gradients");
         let mut remove_gradient = None;
+        let mut edit_gradient = None;
         let mut chosen: Option<BgFill> = None;
         egui::Grid::new("gradients").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
             let mut tiles = 0;
@@ -1295,9 +1430,12 @@ impl Editor {
                 let del = ui.interact(badge, ui.id().with(("delete-gradient", i)), Sense::click());
                 ui.painter().circle_filled(badge.center(), 8.0, Color32::from_black_alpha(170));
                 ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(10.0), Color32::WHITE);
-                let resp = resp.on_hover_text("Your gradient");
+                let resp = resp.on_hover_text("Your gradient — double-click to edit it");
                 if del.on_hover_text("Delete this gradient").clicked() {
                     remove_gradient = Some(i);
+                } else if resp.double_clicked() {
+                    // Open the same window the + tile opens, saving back over this tile.
+                    edit_gradient = Some((i, g.clone()));
                 } else if resp.clicked() {
                     chosen = Some(BgFill::Custom(Box::new(g.clone())));
                 }
@@ -1336,11 +1474,14 @@ impl Editor {
             }
             self.flash("Gradient removed");
         }
+        if let Some((i, gradient)) = edit_gradient {
+            self.gradient_edit = Some(i);
+            self.gradient_draft = Some(gradient);
+        }
         if let Some(fill) = chosen {
             self.set_fill(fill);
         }
-        ui.add_space(6.0);
-        ui.label(RichText::new("Plain color").strong());
+        section(ui, "Solid Colors");
         ui.horizontal_wrapped(|ui| {
             for c in [
                 [255, 255, 255, 255],
@@ -1369,7 +1510,7 @@ impl Editor {
                 self.set_fill(BgFill::Solid(custom));
             }
         });
-        ui.add_space(6.0);
+        section(ui, "Effects");
         ui.horizontal_wrapped(|ui| {
             if ui.selectable_label(fill == Some(BgFill::Blurred), format!("{} Blurred", icon::DROP)).clicked() {
                 self.set_fill(BgFill::Blurred);
@@ -1388,7 +1529,7 @@ impl Editor {
         });
         self.watermark_section(ui);
         let Some(bg) = self.doc.background.clone() else { return };
-        ui.add_space(8.0);
+        section(ui, "Layout");
         let mut b = bg.clone();
         let mut changed = false;
         egui::Grid::new("bg-settings").num_columns(2).spacing(vec2(8.0, 8.0)).show(ui, |ui| {
@@ -1638,13 +1779,19 @@ impl Editor {
             ui.painter().rect_stroke(view.img_rect, 0, ui.visuals().widgets.noninteractive.bg_stroke, StrokeKind::Outside);
         }
 
-        // Zoom with Ctrl/Cmd + wheel or pinch; pan with the wheel when zoomed in.
+        // The wheel zooms smoothly around the pointer; Shift + wheel moves the canvas instead.
         if resp.hovered() {
-            let (zoom_delta, scroll, cmd) = ctx.input(|i| (i.zoom_delta(), i.smooth_scroll_delta, i.modifiers.command));
+            let (zoom_delta, scroll, shift) = ctx.input(|i| (i.zoom_delta(), i.smooth_scroll_delta, i.modifiers.shift));
+            let pointer = resp.hover_pos();
             if zoom_delta != 1.0 {
-                self.zoom = (self.zoom * zoom_delta).clamp(0.1, 16.0);
-            } else if !cmd && self.zoom > 1.0 && scroll != Vec2::ZERO {
-                self.pan += scroll;
+                self.zoom_to(self.zoom * zoom_delta, pointer);
+            } else if scroll != Vec2::ZERO {
+                if shift {
+                    self.pan += scroll;
+                } else {
+                    // A wheel notch is about 50 points, which is a little under 8 %.
+                    self.zoom_to(self.zoom * (1.0 + scroll.y * 0.0015).clamp(0.8, 1.25), pointer);
+                }
             }
         }
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
@@ -1689,7 +1836,7 @@ impl Editor {
                 let it = self.doc.items.get(i)?;
                 it.handles().iter().position(|h| h.distance(b) <= tol * 1.5).map(|h| (i, h))
             });
-            self.drag = if middle {
+            self.drag = if middle || self.hand() {
                 Some(EditDrag::Pan { last: start })
             } else if on_watermark {
                 // The watermark sits on top of the annotations, so it gets the drag first.
@@ -1820,6 +1967,7 @@ impl Editor {
                         }
                     }
                 }
+                Tool::Pan => {}
                 _ => {
                     self.commit_text();
                     self.selected = hit;
@@ -1848,6 +1996,8 @@ impl Editor {
             let over_handle = self.selected.and_then(|i| self.doc.items.get(i)).is_some_and(|it| it.handles().iter().any(|h| h.distance(b) <= tol * 1.5));
             let icon = if over_handle {
                 egui::CursorIcon::Grab
+            } else if self.hand() {
+                if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
             } else if self.tool == Tool::Select {
                 if self.doc.items.iter().any(|it| it.hit(b, tol)) { egui::CursorIcon::Move } else { egui::CursorIcon::Default }
             } else if self.tool == Tool::Text {
@@ -2056,7 +2206,8 @@ impl Editor {
             let k = self.export_percent as f32 / 100.0;
             ui.label(RichText::new(format!("{} × {} px", (size.x * k).round(), (size.y * k).round())).weak());
             ui.separator();
-            ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).weak()).on_hover_text("Ctrl/Cmd + wheel to zoom, Ctrl/Cmd+0 to fit");
+            ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).weak())
+                .on_hover_text("Wheel to zoom, Shift+wheel or the hand tool to move, Ctrl/Cmd+0 to fit");
             if let Some((label, _)) = &self.task {
                 ui.separator();
                 ui.spinner();
@@ -2116,6 +2267,33 @@ fn update_created(it: &mut Item, start: Pos2, b: Pos2, shift: bool) {
         }
         _ => {}
     }
+}
+
+/// Pan that keeps the point `anchor` fixed when the zoom grows by `factor`; `centre` is the middle
+/// of the visible canvas.
+fn zoomed_pan(pan: Vec2, centre: Pos2, anchor: Pos2, factor: f32) -> Vec2 {
+    (1.0 - factor) * (anchor - centre) + pan * factor
+}
+
+/// A small square icon button for the zoom cluster.
+fn tiny_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+    let colour = ui.visuals().widgets.inactive.fg_stroke.color;
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, 5, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(12.5), colour);
+    resp.on_hover_text(tip).clicked()
+}
+
+/// A titled block of the background panel: padding, a one-pixel rule, then the title.
+fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(8.0);
+    let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(rule, 0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+    ui.add_space(8.0);
+    ui.label(RichText::new(title).strong());
+    ui.add_space(2.0);
 }
 
 /// A small dial for a shadow direction: click or drag inside it to point the shadow.
@@ -2309,5 +2487,29 @@ mod tests {
         assert_eq!(s.first(), pts.first());
         assert_eq!(s.last(), pts.last());
         assert!(s.len() > pts.len());
+    }
+
+    /// Zooming must keep the base pixel under the pointer where it is, which is what makes a wheel
+    /// zoom feel like it follows the mouse.
+    #[test]
+    fn zooming_holds_the_point_under_the_pointer() {
+        let canvas = Rect::from_min_size(pos2(100.0, 60.0), vec2(900.0, 700.0));
+        let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
+        let view = |zoom: f32, pan: Vec2| View {
+            img_rect: Rect::from_center_size(canvas.center() + pan, region.size() * zoom),
+            region,
+            offset: Vec2::ZERO,
+            out_scale: 1.0,
+            out_size: region.size(),
+        };
+        let pointer = pos2(320.0, 240.0);
+        let start = view(1.0, Vec2::ZERO);
+        for factor in [1.3, 0.6, 4.0] {
+            let pan = zoomed_pan(Vec2::ZERO, canvas.center(), pointer, factor);
+            let zoomed = view(factor, pan);
+            let before = start.to_base(pointer);
+            let after = zoomed.to_base(pointer);
+            assert!(before.distance(after) < 0.01, "×{factor}: {before:?} became {after:?}");
+        }
     }
 }

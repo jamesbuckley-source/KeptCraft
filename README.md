@@ -19,8 +19,9 @@ stays close enough to merge from upstream.
 | Area, previous area, fullscreen, window capture | `capture-area`, `capture-previous-area`, `capture-fullscreen`, `capture-window` over a frozen screen, with crosshair and magnifier; windows can get a shadow or a background |
 | Self-timer | `self-timer`: select, then a countdown beside the region |
 | Annotate, redact and polish | Editor with arrow (4 styles, curved), rectangle, filled rectangle, ellipse, line, pen with smoothing, highlighter, text (7 styles, single line or wrapping paragraph), counter (ABC or 123, size, ring, drop shadow with strength, blur, offset and direction), spotlight, blur, pixelate and solid redaction, crop with aspect ratios, image drop-in, colour palette and picker |
+| Zoom and move the canvas | Wheel zooms smoothly around the pointer, the toolbar slider and ± buttons zoom, a reset returns to the fit; hold Space (or pick the hand, or drag with the middle button) to move around a zoomed image |
 | Numbered steps with commentary | The counter tool adds an optional comment band on any edge of the image (top, right, bottom, left): each step gets a round badge in its counter's colour, one comment per step, its own band colour, text size and padding, wrapped to the room it gets |
-| Background tool | Gradients (built-in and your own, with as many colours as you like), solid, image and blurred fills, padding, corner radius, shadow, aspect ratio, alignment, auto-balance, a draggable image watermark, saved presets (background and counter look) |
+| Background tool | Gradients (built-in and your own — double-click one to edit it), solid colours, image and blurred fills, padding, corner radius, shadow, aspect ratio, alignment, auto-balance, a draggable image watermark, saved presets that an update button writes back to |
 | Editable project files | `.shotcraft` (JSON with the base image and every annotation) |
 | Scrolling capture | Stitches frames while you or auto-scroll move the content |
 | Quick Access Overlay | Floating card after each capture: copy, save, annotate, pin, upload, OCR, or drag the file into another app |

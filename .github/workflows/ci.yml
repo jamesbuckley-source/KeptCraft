@@ -110,8 +110,10 @@ jobs:
 
       - name: Third-party licenses are current
         run: |
-          cargo about generate --workspace --locked about.hbs -o THIRD-PARTY-LICENSES.md
-          git diff --exit-code THIRD-PARTY-LICENSES.md
+          # cargo-about's "Used by" lists come out in a different order on different platforms, so
+          # compare the lines, not the file: content that is actually stale still shows up.
+          cargo about generate --workspace --locked about.hbs -o "$RUNNER_TEMP/licenses.md"
+          diff <(sort "$RUNNER_TEMP/licenses.md") <(sort THIRD-PARTY-LICENSES.md)
 
       - name: Validate desktop entry and AppStream metadata
         run: |

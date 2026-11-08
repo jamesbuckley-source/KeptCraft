@@ -118,6 +118,16 @@ jobs:
           cargo about generate --workspace --locked about.hbs -o "$RUNNER_TEMP/licenses.md"
           diff <(norm "$RUNNER_TEMP/licenses.md") <(norm THIRD-PARTY-LICENSES.md)
 
+      # The file itself is the fix, and it can only be produced here: keep it for whoever has to
+      # regenerate it.
+      - name: Keep the generated list
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: THIRD-PARTY-LICENSES
+          path: ${{ runner.temp }}/licenses.md
+          if-no-files-found: warn
+
       - name: Validate desktop entry and AppStream metadata
         run: |
           sudo apt-get update

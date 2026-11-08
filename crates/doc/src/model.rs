@@ -153,6 +153,88 @@ pub fn letters(n: u32) -> String {
 pub struct CommentEntry {
     pub n: u32,
     pub text: String,
+    /// A badge label of the user's own; `None` shows the counter's number or letter.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Stretches of `text` drawn bold or italic.
+    #[serde(default)]
+    pub spans: Vec<TextSpan>,
+    /// Start each typed line with a bullet.
+    #[serde(default)]
+    pub bullet: bool,
+}
+
+impl CommentEntry {
+    pub fn new(n: u32, text: impl Into<String>) -> Self {
+        Self { n, text: text.into(), label: None, spans: Vec::new(), bullet: false }
+    }
+
+    /// What the badge shows: the user's label, else the counter's numbering.
+    pub fn badge(&self, counter_label: &str) -> String {
+        self.label.clone().unwrap_or_else(|| counter_label.to_owned())
+    }
+
+    /// The style covering character `at`, if any.
+    pub fn style_at(&self, at: usize) -> (bool, bool) {
+        self.spans.iter().find(|s| at >= s.start && at < s.end).map_or((false, false), |s| (s.bold, s.italic))
+    }
+
+    /// Turn bold and italic on or off across `range`, splitting and merging spans as needed.
+    pub fn style_range(&mut self, range: std::ops::Range<usize>, bold: Option<bool>, italic: Option<bool>) {
+        let len = self.text.chars().count();
+        let start = range.start.min(len);
+        let end = range.end.min(len);
+        if start >= end {
+            return;
+        }
+        let mut out: Vec<TextSpan> = Vec::with_capacity(self.spans.len() + 2);
+        // Every boundary the range adds splits the spans it falls inside.
+        let mut cuts = vec![start, end];
+        for span in &self.spans {
+            cuts.push(span.start.clamp(start, end));
+            cuts.push(span.end.clamp(start, end));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for pair in cuts.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if a >= b {
+                continue;
+            }
+            let (mut was_bold, mut was_italic) = self.style_at(a);
+            if a >= start && b <= end {
+                if let Some(on) = bold {
+                    was_bold = on;
+                }
+                if let Some(on) = italic {
+                    was_italic = on;
+                }
+            }
+            if !was_bold && !was_italic {
+                continue;
+            }
+            // Extend the previous span when it carries the same style.
+            if let Some(last) = out.last_mut()
+                && last.end == a
+                && last.bold == was_bold
+                && last.italic == was_italic
+            {
+                last.end = b;
+                continue;
+            }
+            out.push(TextSpan { start: a, end: b, bold: was_bold, italic: was_italic });
+        }
+        self.spans = out;
+    }
+}
+
+/// A stretch of a comment drawn bold or italic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextSpan {
+    pub start: usize,
+    pub end: usize,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 /// Which edge of the image the comment band is attached to.
@@ -207,13 +289,6 @@ pub struct Commentary {
     /// A title over the comments; `None` leaves it out.
     #[serde(default)]
     pub header: Option<String>,
-    #[serde(default)]
-    pub bold: bool,
-    #[serde(default)]
-    pub italic: bool,
-    /// Start each typed line with a bullet.
-    #[serde(default)]
-    pub bullet: bool,
     /// Gap between the header and each step, in base pixels.
     #[serde(default = "spacing_default")]
     pub spacing: f32,
@@ -245,9 +320,6 @@ impl Default for Commentary {
             match_counter: true,
             badge: badge_default(),
             header: None,
-            bold: false,
-            italic: false,
-            bullet: false,
             spacing: spacing_default(),
         }
     }
@@ -265,7 +337,7 @@ impl Commentary {
         if let Some(i) = self.entries.iter().position(|e| e.n == n) {
             return &mut self.entries[i].text;
         }
-        self.entries.push(CommentEntry { n, text: String::new() });
+        self.entries.push(CommentEntry::new(n, String::new()));
         let i = self.entries.len() - 1;
         &mut self.entries[i].text
     }

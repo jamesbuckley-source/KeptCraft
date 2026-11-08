@@ -94,11 +94,19 @@ pub fn render(doc: &Doc, base: &RgbaImage, o: &RenderOpts) -> Result<Rendered> {
     }
 }
 
-/// One step as it appears in the band: its badge label, badge colour and wrapped comment.
+/// One step as it appears in the band: its badge, colour, text and the wrapped lines.
 struct BandStep {
     label: String,
     color: Color32,
-    lines: Vec<String>,
+    /// The text as shown (bullets included), and where each wrapped line starts in it.
+    lines: Vec<(String, usize)>,
+    spans: Vec<crate::model::TextSpan>,
+}
+
+impl BandStep {
+    fn style_at(&self, at: usize) -> (bool, bool) {
+        self.spans.iter().find(|s| at >= s.start && at < s.end).map_or((false, false), |s| (s.bold, s.italic))
+    }
 }
 
 /// Where the image and its comment band land in the finished picture, in output pixels.
@@ -120,19 +128,45 @@ struct BandLayout {
     gap: f32,
 }
 
-/// The text of one step as the band shows it, bulleted when the band asks for bullets.
-fn commentary_text(commentary: &Commentary, entry: &crate::model::CommentEntry) -> String {
-    let text = entry.text.trim();
-    if !commentary.bullet {
-        return text.to_owned();
+/// The text of one step as the band shows it, bulleted when the step asks for bullets. The spans
+/// move with the bullets so styling survives them.
+fn commentary_text(entry: &crate::model::CommentEntry) -> (String, Vec<crate::model::TextSpan>) {
+    let src = entry.text.trim();
+    if !entry.bullet {
+        return (src.to_owned(), entry.spans.clone());
     }
-    text.lines().map(|line| format!("•  {}", line.trim())).collect::<Vec<_>>().join("\n")
+    let mut text = String::new();
+    // Where each source line starts, and where it lands once its bullet is in front.
+    let mut starts: Vec<(usize, usize)> = Vec::new();
+    let mut src_at = 0;
+    let mut out_at = 0;
+    for (i, line) in src.lines().enumerate() {
+        if i > 0 {
+            text.push('\n');
+            out_at += 1;
+        }
+        let bullet = "•  ";
+        text.push_str(bullet);
+        starts.push((src_at, out_at + bullet.chars().count()));
+        let len = line.chars().count();
+        text.push_str(line);
+        src_at += len + 1;
+        out_at += bullet.chars().count() + len;
+    }
+    let moved = |at: usize| -> usize {
+        match starts.iter().rev().find(|(src_line, _)| *src_line <= at) {
+            Some((src_line, out_line)) => out_line + (at - src_line),
+            None => at,
+        }
+    };
+    let spans = entry.spans.iter().map(|s| crate::model::TextSpan { start: moved(s.start), end: moved(s.end), ..*s }).collect();
+    (text, spans)
 }
 
 /// Draw band text, faking the bold and italic the bundled font has no faces for.
-fn draw_band_text(out: &mut Pixmap, text: &str, size: f32, origin: Pos2, color: Color32, commentary: &Commentary) {
+fn draw_band_text(out: &mut Pixmap, text: &str, size: f32, origin: Pos2, color: Color32, bold: bool, italic: bool) {
     let Some(path) = fonts::text_path(text, size, origin) else { return };
-    let path = if commentary.italic {
+    let path = if italic {
         // Shear towards the right above the text's own origin.
         let shear = 0.2;
         path.clone().transform(Transform::from_row(1.0, 0.0, -shear, 1.0, shear * origin.y, 0.0)).unwrap_or(path)
@@ -140,9 +174,27 @@ fn draw_band_text(out: &mut Pixmap, text: &str, size: f32, origin: Pos2, color: 
         path
     };
     out.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
-    if commentary.bold {
+    if bold {
         // A second pass a hair to the right thickens the strokes.
         out.fill_path(&path, &paint(color), FillRule::Winding, Transform::from_translate(size * 0.035, 0.0), None);
+    }
+}
+
+/// Draw one wrapped line, switching style where the step's spans do.
+fn draw_band_line(out: &mut Pixmap, step: &BandStep, line: &str, start: usize, size: f32, origin: Pos2, color: Color32) {
+    let end = start + line.chars().count();
+    let mut x = origin.x;
+    let mut i = start;
+    while i < end {
+        let style = step.style_at(i);
+        let mut j = i;
+        while j < end && step.style_at(j) == style {
+            j += 1;
+        }
+        let run: String = line.chars().skip(i - start).take(j - i).collect();
+        draw_band_text(out, &run, size, pos2(x, origin.y), color, style.0, style.1);
+        x += fonts::measure(&run, size).x;
+        i = j;
     }
 }
 
@@ -180,9 +232,10 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
                     Some((_, color, _)) if commentary.match_counter => *color,
                     _ => commentary.badge,
                 };
-                let label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
-                let text = commentary_text(commentary, entry);
-                BandStep { label, color, lines: fonts::wrap_lines(&text, size, avail) }
+                let counter_label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
+                let label = entry.badge(&counter_label);
+                let (text, spans) = commentary_text(entry);
+                BandStep { label, color, lines: fonts::wrap_lines_from(&text, size, avail), spans }
             })
             .collect()
     };
@@ -216,7 +269,7 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
         }
         (chosen.unwrap_or_default(), None)
     };
-    let thickness = steps.iter().flat_map(|st| st.lines.iter()).map(|line| fonts::measure(line, size).x).fold(0.0, f32::max);
+    let thickness = steps.iter().flat_map(|st| st.lines.iter()).map(|(line, _)| fonts::measure(line, size).x).fold(0.0, f32::max);
 
     let mut layout = BandLayout {
         out: Vec2::ZERO,
@@ -272,8 +325,7 @@ fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) ->
     let x = layout.band_at.x + layout.pad;
     if let Some(header) = &layout.header {
         // A header reads as a title: always bold, a touch larger than the comments.
-        let title = Commentary { bold: true, ..commentary.clone() };
-        draw_band_text(&mut out, header, layout.size * 1.15, pos2(x, top), commentary.text_color, &title);
+        draw_band_text(&mut out, header, layout.size * 1.15, pos2(x, top), commentary.text_color, true, false);
         top += layout.header_step;
     }
     let gap = layout.gap;
@@ -291,8 +343,8 @@ fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) ->
         if let Some(path) = fonts::text_path(&step.label, badge_text, label_at) {
             out.fill_path(&path, &paint(contrast_on(step.color)), FillRule::Winding, Transform::identity(), None);
         }
-        for line in &step.lines {
-            draw_band_text(&mut out, line, layout.size, pos2(x + layout.indent, top), commentary.text_color, commentary);
+        for (line, start) in &step.lines {
+            draw_band_line(&mut out, step, line, *start, layout.size, pos2(x + layout.indent, top), commentary.text_color);
             top += layout.line_step;
         }
     }
@@ -1019,7 +1071,7 @@ mod tests {
         doc.commentary = Some(Commentary::default());
         assert_eq!(flatten(&doc).unwrap().dimensions(), (40, 20));
         let mut commentary = Commentary { size: 10.0, padding: 6.0, ..Default::default() };
-        commentary.entries.push(crate::model::CommentEntry { n: 1, text: "first step".into() });
+        commentary.entries.push(crate::model::CommentEntry::new(1, "first step"));
         doc.commentary = Some(commentary);
         let out = flatten(&doc).unwrap();
         assert_eq!(out.width(), 40);
@@ -1032,8 +1084,7 @@ mod tests {
     #[test]
     fn long_commentary_wraps_to_the_band_width() {
         let mut doc = Doc::new(RgbaImage::from_pixel(120, 20, image::Rgba([10, 10, 10, 255])));
-        let mut commentary =
-            Commentary { size: 10.0, padding: 4.0, entries: vec![crate::model::CommentEntry { n: 1, text: "short".into() }], ..Default::default() };
+        let mut commentary = Commentary { size: 10.0, padding: 4.0, entries: vec![crate::model::CommentEntry::new(1, "short")], ..Default::default() };
         doc.commentary = Some(commentary.clone());
         let single = crate::render::output_size(&doc, &RenderOpts::default()).y;
         commentary.entries[0].text = "a much longer remark that cannot fit on one line of this narrow image".into();
@@ -1053,7 +1104,7 @@ mod tests {
                 padding: 4.0,
                 side,
                 background: Color32::from_rgb(200, 40, 40),
-                entries: vec![crate::model::CommentEntry { n: 1, text: "step".into() }],
+                entries: vec![crate::model::CommentEntry::new(1, "step")],
                 ..Default::default()
             });
             flatten(&doc).unwrap()
@@ -1087,7 +1138,7 @@ mod tests {
     #[test]
     fn the_band_takes_a_header_and_the_space_between_comments() {
         let mut doc = Doc::new(RgbaImage::from_pixel(120, 60, image::Rgba([10, 10, 10, 255])));
-        let entries = vec![crate::model::CommentEntry { n: 1, text: "one".into() }, crate::model::CommentEntry { n: 2, text: "two".into() }];
+        let entries = vec![crate::model::CommentEntry::new(1, "one"), crate::model::CommentEntry::new(2, "two")];
         let tight = Commentary { size: 10.0, padding: 4.0, spacing: 0.0, entries, ..Default::default() };
         doc.commentary = Some(tight.clone());
         let tight_h = crate::render::output_size(&doc, &RenderOpts::default()).y;
@@ -1102,10 +1153,10 @@ mod tests {
     }
 
     #[test]
-    fn bold_thickens_the_band_and_italic_slants_it() {
-        let ink = |commentary: Commentary| {
+    fn a_styled_span_thickens_and_slants_its_words() {
+        let ink = |entry: crate::model::CommentEntry| {
             let mut doc = Doc::new(RgbaImage::from_pixel(160, 40, image::Rgba([10, 10, 10, 255])));
-            doc.commentary = Some(commentary);
+            doc.commentary = Some(Commentary { size: 14.0, padding: 6.0, entries: vec![entry], ..Default::default() });
             let out = flatten(&doc).unwrap();
             let mut pixels = 0;
             for y in 40..out.height() {
@@ -1117,21 +1168,27 @@ mod tests {
             }
             (out, pixels)
         };
-        let entries = vec![crate::model::CommentEntry { n: 1, text: "Hello world".into() }];
-        let plain = Commentary { size: 14.0, padding: 6.0, entries: entries.clone(), ..Default::default() };
+        let plain = crate::model::CommentEntry::new(1, "Hello world");
         let (plain_img, plain_ink) = ink(plain.clone());
-        let (bold_img, bold_ink) = ink(Commentary { bold: true, ..plain.clone() });
+
+        let mut bold = plain.clone();
+        bold.style_range(0..11, Some(true), None);
+        assert_eq!(bold.spans.len(), 1, "one span covers the whole comment");
+        let (bold_img, bold_ink) = ink(bold);
         assert!(bold_ink > plain_ink, "bold lays down more ink: {bold_ink} vs {plain_ink}");
-        let (italic_img, _) = ink(Commentary { italic: true, ..plain });
+
+        let mut italic = plain;
+        italic.style_range(0..11, None, Some(true));
+        let (italic_img, _) = ink(italic);
         assert_ne!(plain_img.as_raw(), italic_img.as_raw(), "italic slants the lines");
-        assert_eq!(plain_img.width(), bold_img.width(), "neither formatting option changes the size");
+        assert_eq!(plain_img.width(), bold_img.width(), "styling never changes the size");
     }
 
     #[test]
     fn a_side_band_takes_the_width_it_is_given() {
         use crate::model::CommentarySide;
         let mut doc = Doc::new(RgbaImage::from_pixel(200, 120, image::Rgba([10, 10, 10, 255])));
-        let entries = vec![crate::model::CommentEntry { n: 1, text: "step".into() }];
+        let entries = vec![crate::model::CommentEntry::new(1, "step")];
         let auto = Commentary { size: 12.0, padding: 6.0, side: CommentarySide::Right, entries, ..Default::default() };
         doc.commentary = Some(auto.clone());
         let fitted = crate::render::output_size(&doc, &RenderOpts::default());
@@ -1156,7 +1213,7 @@ mod tests {
             size: 12.0,
             padding: 4.0,
             badge: Color32::from_rgb(255, 0, 255),
-            entries: vec![crate::model::CommentEntry { n: 1, text: "step".into() }],
+            entries: vec![crate::model::CommentEntry::new(1, "step")],
             ..Default::default()
         };
         doc.commentary = Some(commentary.clone());

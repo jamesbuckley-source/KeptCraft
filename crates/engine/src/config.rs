@@ -455,10 +455,9 @@ mod tests {
         let commentary = Commentary {
             side: CommentarySide::Right,
             width: 320.0,
-            bold: true,
-            italic: true,
-            bullet: true,
             spacing: 12.0,
+            padding: 18.0,
+            text_color: shotcraft_doc::model::Commentary::default().text_color,
             header: Some("Notes".into()),
             ..Default::default()
         };

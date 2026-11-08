@@ -19,8 +19,8 @@ use image::RgbaImage;
 use shotcraft_engine::config::{ExportFormat, Preset, Settings, State, default_palette};
 use shotcraft_engine::doc::fonts;
 use shotcraft_engine::doc::model::{
-    Anchor, ArrowStyle, Aspect, Background, BgFill, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item, Orient,
-    OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
+    Anchor, ArrowStyle, Aspect, Background, BgFill, CommentEntry, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item,
+    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextStyle, Watermark, constrain_aspect,
 };
 use shotcraft_engine::doc::render::{self, RenderOpts};
 use shotcraft_engine::{capture, history, ocr, share};
@@ -118,6 +118,20 @@ enum ColourAction {
     Cancel,
 }
 
+/// What an eyedropper click on the image changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickTarget {
+    /// The drawing colour and the selected item.
+    Tool,
+    BandColour,
+    TextColour,
+    BadgeColour,
+    /// The colour being chosen in the Solid Colors window.
+    ColourDraft,
+    /// One stop of the gradient being edited.
+    GradientStop(usize),
+}
+
 #[derive(Clone, Copy)]
 enum CropDrag {
     New(Pos2),
@@ -210,7 +224,13 @@ struct Editor {
     space_down: bool,
     show_background: bool,
     crop: Option<CropState>,
-    picking_color: bool,
+    /// What an eyedropper click on the image drops its colour into.
+    pick_target: Option<PickTarget>,
+    /// The step whose comment box was last edited, and its selection.
+    comment_focus: Option<u32>,
+    comment_selection: Option<(u32, usize, usize)>,
+    /// A step badge being renamed in place.
+    label_edit: Option<(u32, String)>,
     export_percent: u32,
     view: View,
     tex: Option<TextureHandle>,
@@ -299,7 +319,10 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         space_down: false,
         show_background,
         crop: None,
-        picking_color: false,
+        pick_target: None,
+        comment_focus: None,
+        comment_selection: None,
+        label_edit: None,
         export_percent: 100,
         view: View::default(),
         tex: None,
@@ -891,7 +914,9 @@ impl Editor {
         self.show_commentary = !self.show_commentary;
         if self.show_commentary && self.doc.commentary.is_none() {
             self.checkpoint();
-            self.doc.commentary = Some(Commentary::default());
+            // A tall image gets its comments in a column beside it; a wide one gets a strip under it.
+            let side = if self.doc.base.height() > self.doc.base.width() { CommentarySide::Right } else { CommentarySide::Bottom };
+            self.doc.commentary = Some(Commentary { side, ..Default::default() });
             self.touch();
         }
     }
@@ -948,9 +973,26 @@ impl Editor {
             {
                 self.select_tool(Tool::Pan);
             }
+            let counters = self.doc.items.iter().filter(|it| matches!(it.shape, Shape::Counter { .. })).count();
             for (tool, ic, tip, _) in TOOLS {
+                if tool == Tool::Counter {
+                    ui.separator();
+                }
                 if theme::tool_button_icon(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
                     self.select_tool(tool);
+                }
+                if tool == Tool::Counter {
+                    // The comment panel lives with the steps it describes, and needs one to exist.
+                    ui.add_enabled_ui(counters > 0, |ui| {
+                        if theme::tool_button(ui, icon::CHAT_CIRCLE, None, self.show_commentary, false)
+                            .on_hover_text("The steps' comments")
+                            .on_disabled_hover_text("Place a numbered step first")
+                            .clicked()
+                        {
+                            self.toggle_commentary();
+                        }
+                    });
+                    ui.separator();
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1011,17 +1053,8 @@ impl Editor {
                         self.undo();
                     }
                 });
-                ui.separator();
-                // A button rather than a checkbox: the same switch in half the width.
-                if ui
-                    .add(egui::Button::selectable(self.show_commentary, "Commentary"))
-                    .on_hover_text("Show the comment panel: one box per step, drawn beside the image")
-                    .clicked()
-                {
-                    self.toggle_commentary();
-                }
-                // The cluster is the last thing added to the row, so it only draws when the tools
-                // and the actions above have left room for it.
+                // The zoom cluster is the last thing added to the row, so it only draws when the
+                // tools and the actions above have left room for it.
                 if ui.available_width() > 132.0 {
                     ui.separator();
                     self.zoom_control(ui);
@@ -1077,6 +1110,9 @@ impl Editor {
                         let mut colour = swatch_color(draft.stops[i].color);
                         if ui.color_edit_button_srgba(&mut colour).changed() {
                             draft.stops[i].color = colour.to_array();
+                        }
+                        if eyedropper(ui, self.pick_target == Some(PickTarget::GradientStop(i))) {
+                            self.pick_target = Some(PickTarget::GradientStop(i));
                         }
                         let mut percent = draft.stops[i].at * 100.0;
                         if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).suffix("%").speed(1.0)).changed() {
@@ -1176,7 +1212,7 @@ impl Editor {
                     self.update_settings(|s| s.palette.push(c));
                 }
                 if ui.button(format!("{} Pick from image", icon::EYEDROPPER)).clicked() {
-                    self.picking_color = true;
+                    self.pick_target = Some(PickTarget::Tool);
                 }
             });
         });
@@ -1819,7 +1855,12 @@ impl Editor {
                 let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
                 ui.painter().rect_filled(preview, 6, draft);
                 ui.add_space(4.0);
-                ui.color_edit_button_srgba(&mut draft);
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgba(&mut draft);
+                    if eyedropper(ui, self.pick_target == Some(PickTarget::ColourDraft)) {
+                        self.pick_target = Some(PickTarget::ColourDraft);
+                    }
+                });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if editing.is_some() {
@@ -1886,6 +1927,39 @@ impl Editor {
         }
     }
 
+    /// Drop a colour picked off the image into whatever asked for it.
+    fn apply_picked(&mut self, target: PickTarget, colour: Color32) {
+        match target {
+            PickTarget::Tool => {
+                self.color = colour;
+                self.restyle_selected(|it| it.color = colour);
+            }
+            PickTarget::BandColour => self.update_commentary(|c| c.background = colour),
+            PickTarget::TextColour => self.update_commentary(|c| c.text_color = colour),
+            PickTarget::BadgeColour => self.update_commentary(|c| {
+                c.badge = colour;
+                c.match_counter = false;
+            }),
+            PickTarget::ColourDraft => self.colour_draft = Some(colour),
+            PickTarget::GradientStop(i) => {
+                if let Some(draft) = &mut self.gradient_draft
+                    && let Some(stop) = draft.stops.get_mut(i)
+                {
+                    stop.color = colour.to_array();
+                }
+            }
+        }
+    }
+
+    /// Change the comment band's settings in the document, as one undo step.
+    fn update_commentary(&mut self, f: impl FnOnce(&mut Commentary)) {
+        if let Some(mut c) = self.doc.commentary.take() {
+            f(&mut c);
+            self.doc.commentary = Some(c);
+            self.touch();
+        }
+    }
+
     /// The comment band's look, ready to store in a preset: its settings without the comments.
     fn commentary_style(&self) -> Option<Commentary> {
         self.doc.commentary.clone().map(|mut c| {
@@ -1894,7 +1968,33 @@ impl Editor {
         })
     }
 
-    /// The comment panel on the right: formatting, the header, the band's look, and one box per step.
+    /// Bold or italic the selected text of the last comment box that had focus.
+    fn style_selection(&mut self, c: &mut Commentary, bold: Option<bool>, italic: Option<bool>) -> bool {
+        let Some((n, from, to)) = self.comment_selection.filter(|(_, from, to)| from != to) else {
+            return false;
+        };
+        let Some(entry) = c.entries.iter_mut().find(|e| e.n == n) else {
+            return false;
+        };
+        // Pressing B on text that is already bold takes the bold away again.
+        let toggle = |span: usize, want: bool| (from..to).all(|i| if span == 0 { entry.style_at(i).0 } else { entry.style_at(i).1 }) && !want;
+        let bold = bold.map(|want| if toggle(0, want) { false } else { want });
+        let italic = italic.map(|want| if toggle(1, want) { false } else { want });
+        entry.style_range(from..to, bold, italic);
+        true
+    }
+
+    /// Turn bullets on or off for the step whose box had focus.
+    fn toggle_bullet(&mut self, c: &mut Commentary) -> bool {
+        let Some(n) = self.comment_focus else { return false };
+        let Some(entry) = c.entries.iter_mut().find(|e| e.n == n) else {
+            return false;
+        };
+        entry.bullet = !entry.bullet;
+        true
+    }
+
+    /// The comment panel on the right: the band's look, then the steps and their formatting.
     fn commentary_panel(&mut self, ui: &mut egui::Ui) {
         let counters: Vec<(u32, String)> = self
             .doc
@@ -1911,22 +2011,10 @@ impl Editor {
         };
         let mut changed = false;
         let mut picked = None;
+        let mut label_edit = self.label_edit.take();
+        let mut label_done = false;
 
-        // B / I / bullets, for the whole band.
-        ui.horizontal(|ui| {
-            if ui.selectable_label(c.bold, RichText::new("B").strong()).on_hover_text("Bold").clicked() {
-                c.bold = !c.bold;
-                changed = true;
-            }
-            if ui.selectable_label(c.italic, RichText::new("I").italics()).on_hover_text("Italic").clicked() {
-                c.italic = !c.italic;
-                changed = true;
-            }
-            if ui.selectable_label(c.bullet, "•").on_hover_text("Start every typed line with a bullet").clicked() {
-                c.bullet = !c.bullet;
-                changed = true;
-            }
-        });
+        // One setting per row.
         ui.horizontal(|ui| {
             let mut header = c.header.is_some();
             if ui.checkbox(&mut header, "Header").on_hover_text("A title over the comments").changed() {
@@ -1934,14 +2022,13 @@ impl Editor {
                 changed = true;
             }
             if let Some(text) = &mut c.header {
-                let width = (ui.available_width() - 4.0).max(80.0);
-                changed |= ui.add(egui::TextEdit::singleline(text).hint_text("Comments").desired_width(width)).changed();
+                let width = (ui.available_width() - 4.0).max(60.0);
+                changed |= ui.add(egui::TextEdit::singleline(text).desired_width(width)).changed();
             }
         });
-        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Side");
-            egui::ComboBox::from_id_salt("commentary-side").selected_text(c.side.label()).width(74.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("commentary-side").selected_text(c.side.label()).width(84.0).show_ui(ui, |ui| {
                 for side in CommentarySide::ALL {
                     if ui.selectable_label(c.side == side, side.label()).clicked() {
                         c.side = side;
@@ -1949,57 +2036,141 @@ impl Editor {
                     }
                 }
             });
-            if !c.side.horizontal() {
+        });
+        if !c.side.horizontal() {
+            ui.horizontal(|ui| {
                 ui.label("Width");
                 changed |= ui
                     .add(egui::DragValue::new(&mut c.width).range(0.0..=4000.0).suffix(" px").speed(4.0))
                     .on_hover_text("How much room the comments get; 0 fits them to the image's height")
                     .changed();
-            }
-        });
+            });
+        }
         ui.horizontal(|ui| {
-            changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
-            ui.label("Text");
+            ui.label("Text size");
             changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
         });
         ui.horizontal(|ui| {
-            ui.label("Space");
-            changed |= ui
-                .add(egui::DragValue::new(&mut c.spacing).range(0.0..=120.0).suffix(" px"))
-                .on_hover_text("Gap between the header and each comment")
-                .changed();
+            ui.label("Space between items");
+            changed |= ui.add(egui::DragValue::new(&mut c.spacing).range(0.0..=120.0).suffix(" px")).changed();
+        });
+        ui.horizontal(|ui| {
             ui.label("Padding");
             changed |= ui.add(egui::DragValue::new(&mut c.padding).range(0.0..=120.0).suffix(" px")).changed();
         });
         ui.horizontal(|ui| {
-            changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
-            if !c.match_counter {
-                changed |= ui.color_edit_button_srgba(&mut c.badge).on_hover_text("Badge colour").changed();
+            ui.label("Band colour");
+            changed |= ui.color_edit_button_srgba(&mut c.background).changed();
+            if eyedropper(ui, self.pick_target == Some(PickTarget::BandColour)) {
+                self.pick_target = Some(PickTarget::BandColour);
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Text colour");
+            changed |= ui.color_edit_button_srgba(&mut c.text_color).changed();
+            if eyedropper(ui, self.pick_target == Some(PickTarget::TextColour)) {
+                self.pick_target = Some(PickTarget::TextColour);
+            }
+        });
+        ui.horizontal(|ui| {
+            changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
+        });
+        if !c.match_counter {
+            ui.horizontal(|ui| {
+                ui.label("Badge colour");
+                changed |= ui.color_edit_button_srgba(&mut c.badge).changed();
+                if eyedropper(ui, self.pick_target == Some(PickTarget::BadgeColour)) {
+                    self.pick_target = Some(PickTarget::BadgeColour);
+                }
+            });
+        }
+
         ui.separator();
+        // Formatting belongs to the steps: it styles the selected text of the box you last typed in.
+        ui.horizontal(|ui| {
+            let has_selection = self.comment_selection.is_some_and(|(_, from, to)| from != to);
+            if ui.add_enabled(has_selection, egui::Button::new(RichText::new("B").strong())).on_hover_text("Bold the selected text").clicked()
+                && self.style_selection(&mut c, Some(true), None)
+            {
+                changed = true;
+            }
+            if ui.add_enabled(has_selection, egui::Button::new(RichText::new("I").italics())).on_hover_text("Italicise the selected text").clicked()
+                && self.style_selection(&mut c, None, Some(true))
+            {
+                changed = true;
+            }
+            if ui.add_enabled(self.comment_focus.is_some(), egui::Button::new("•")).on_hover_text("Bullet the lines of the comment you are editing").clicked()
+                && self.toggle_bullet(&mut c)
+            {
+                changed = true;
+            }
+        });
 
         if counters.is_empty() {
             ui.label(RichText::new("Place a numbered step to describe it here").color(ui.visuals().weak_text_color()));
         }
-        // One box per step: as tall as its text, up to ten lines, then it scrolls.
+        // Every step gets a box, even before anything is typed in it.
+        for (n, _) in &counters {
+            if !c.entries.iter().any(|e| e.n == *n) {
+                c.entries.push(CommentEntry::new(*n, String::new()));
+                changed = true;
+            }
+        }
         let ten_lines = ui.text_style_height(&egui::TextStyle::Body) * 10.0 + 10.0;
-        for (n, label) in &counters {
+        for (n, counter_label) in &counters {
+            let Some(idx) = c.entries.iter().position(|e| e.n == *n) else {
+                continue;
+            };
             ui.horizontal(|ui| {
-                let badge = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
-                if ui.add(badge).on_hover_text("Click to adjust this step").clicked() {
-                    picked = Some(*n);
+                if label_edit.as_ref().is_some_and(|(edit, _)| edit == n) {
+                    if let Some((_, text)) = &mut label_edit {
+                        let resp = ui.add(egui::TextEdit::singleline(text).desired_width(56.0));
+                        let entered = ui.input(|i| i.key_pressed(Key::Enter));
+                        if entered || resp.lost_focus() {
+                            let cleaned = text.trim().to_owned();
+                            if let Some(entry) = c.entries.get_mut(idx) {
+                                entry.label = (!cleaned.is_empty()).then_some(cleaned);
+                            }
+                            label_done = true;
+                            changed = true;
+                        }
+                    }
+                } else {
+                    let label = c.entries[idx].badge(counter_label);
+                    let button = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
+                    let resp = ui.add(button).on_hover_text("Click to adjust the step, double-click to rename it");
+                    if resp.double_clicked() {
+                        label_edit = Some((*n, c.entries[idx].badge(counter_label)));
+                    } else if resp.clicked() {
+                        picked = Some(*n);
+                    }
                 }
-                ui.label(RichText::new(format!("Step {label}")).weak());
             });
+            // As tall as its text, up to ten lines, then it scrolls.
+            let mut focused = false;
+            let mut selection = None;
             egui::ScrollArea::vertical().id_salt(("comment-scroll", *n)).max_height(ten_lines).auto_shrink([false, true]).show(ui, |ui| {
                 let width = ui.available_width();
-                if ui.add(egui::TextEdit::multiline(c.entry_mut(*n)).hint_text("comment").desired_width(width).desired_rows(1)).changed() {
+                let output = egui::TextEdit::multiline(&mut c.entries[idx].text).hint_text("comment").desired_width(width).desired_rows(1).show(ui);
+                if output.response.changed() {
                     changed = true;
                 }
+                focused = output.response.has_focus();
+                selection = output.cursor_range;
             });
+            if focused {
+                self.comment_focus = Some(*n);
+            }
+            if let Some(range) = selection {
+                let [from, to] = range.sorted_cursors();
+                self.comment_selection = Some((*n, from.index.into(), to.index.into()));
+            }
             ui.add_space(2.0);
         }
+        if label_done {
+            label_edit = None;
+        }
+        self.label_edit = label_edit;
         if changed {
             self.doc.commentary = Some(c);
             self.touch();
@@ -2008,7 +2179,6 @@ impl Editor {
             self.select_step(n);
         }
     }
-
     /// Select the numbered step `n` on the image, so the counter row edits its look.
     fn select_step(&mut self, n: u32) {
         if let Some(i) = self.doc.items.iter().position(|it| matches!(&it.shape, Shape::Counter { n: c, .. } if *c == n)) {
@@ -2072,7 +2242,7 @@ impl Editor {
         let shift = ctx.input(|i| i.modifiers.shift);
         let middle = ctx.input(|i| i.pointer.middle_down());
 
-        if self.picking_color {
+        if let Some(target) = self.pick_target {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             if resp.clicked()
                 && let Some(p) = pointer
@@ -2080,10 +2250,9 @@ impl Editor {
                 let b = view.to_base(p);
                 if b.x >= 0.0 && b.y >= 0.0 && (b.x as u32) < self.doc.base.width() && (b.y as u32) < self.doc.base.height() {
                     let [r, g, bb, _] = self.doc.base.get_pixel(b.x as u32, b.y as u32).0;
-                    self.color = Color32::from_rgb(r, g, bb);
-                    self.restyle_selected(|it| it.color = Color32::from_rgb(r, g, bb));
+                    self.apply_picked(target, Color32::from_rgb(r, g, bb));
                 }
-                self.picking_color = false;
+                self.pick_target = None;
             }
             return;
         }
@@ -2548,6 +2717,17 @@ fn tiny_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     resp.on_hover_text(tip).clicked()
 }
 
+/// An eyedropper button: clicking it arms the next canvas click to sample a colour.
+fn eyedropper(ui: &mut egui::Ui, armed: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+    let colour = if armed { theme::ACCENT } else { ui.visuals().widgets.inactive.fg_stroke.color };
+    if resp.hovered() || armed {
+        ui.painter().rect_filled(rect, 5, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::EYEDROPPER, FontId::proportional(12.0), colour);
+    resp.on_hover_text("Pick a colour from the image").clicked()
+}
+
 /// A titled block of the background panel: padding, a one-pixel rule, then the title.
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(8.0);
@@ -2575,7 +2755,10 @@ fn direction_dial(ui: &mut egui::Ui, angle: &mut f32) -> bool {
     painter.circle_stroke(center, r, Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color));
     let a = angle.to_radians();
     painter.line_segment([center, center + Vec2::angled(a) * r], Stroke::new(2.0, theme::ACCENT));
-    painter.circle_filled(center + Vec2::angled(a) * r * 0.55, 2.5, theme::ACCENT);
+    // The head sits near the rim, on a pale disc so the middle of the dial stays readable.
+    let head = center + Vec2::angled(a) * r * 0.8;
+    painter.circle_filled(head, 4.5, Color32::from_white_alpha(46));
+    painter.circle_filled(head, 2.5, theme::ACCENT);
     resp.on_hover_text("Shadow direction").changed() || changed
 }
 

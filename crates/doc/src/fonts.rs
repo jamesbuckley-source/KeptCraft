@@ -81,16 +81,28 @@ pub fn line_height(size: f32) -> f32 {
 /// Break `text` into lines no wider than `width`, keeping the line breaks the user typed. A word
 /// longer than the line gets a line of its own rather than being cut.
 pub fn wrap_lines(text: &str, size: f32, width: f32) -> Vec<String> {
+    wrap_lines_from(text, size, width).into_iter().map(|(line, _)| line).collect()
+}
+
+/// The same wrap, with each line's starting character index in `text` so styled runs can be drawn.
+pub fn wrap_lines_from(text: &str, size: f32, width: f32) -> Vec<(String, usize)> {
     let mut out = Vec::new();
-    for paragraph in text.split('\n') {
+    let mut paragraph_start = 0;
+    for (p, paragraph) in text.split('\n').enumerate() {
+        let line_break = usize::from(p > 0);
         let mut line = String::new();
+        let mut line_start = paragraph_start + line_break;
+        let mut offset = paragraph_start + line_break;
         let mut line_width = 0.0;
         let mut wrote = false;
-        for word in paragraph.split(' ') {
+        for (w, word) in paragraph.split(' ').enumerate() {
+            let word_start = offset;
+            offset += word.chars().count() + usize::from(w > 0);
             let word_width = measure(word, size).x;
             let space = if wrote { measure(" ", size).x } else { 0.0 };
             if wrote && line_width + space + word_width > width {
-                out.push(std::mem::take(&mut line));
+                out.push((std::mem::take(&mut line), line_start));
+                line_start = word_start;
                 line.push_str(word);
                 line_width = word_width;
             } else {
@@ -102,7 +114,8 @@ pub fn wrap_lines(text: &str, size: f32, width: f32) -> Vec<String> {
             }
             wrote = true;
         }
-        out.push(line);
+        out.push((line, line_start));
+        paragraph_start += paragraph.chars().count() + 1;
     }
     out
 }

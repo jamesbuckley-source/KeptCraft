@@ -206,6 +206,9 @@ pub struct Preset {
     /// Numbered-step settings: a preset brings back the counter look as well as the background.
     #[serde(default)]
     pub counter: Option<shotcraft_doc::model::CounterStyle>,
+    /// The comment band's look, without the comments themselves.
+    #[serde(default)]
+    pub commentary: Option<shotcraft_doc::model::Commentary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -356,8 +359,10 @@ pub struct State {
     pub recently_closed: Vec<String>,
     /// Files opened in the editor, most recent last: the File menu's Recent Files.
     pub recent_files: Vec<PathBuf>,
-    /// Height of the counter tool's comment panel, in points; the user drags it.
-    pub commentary_height: Option<f32>,
+    /// Width of the comment panel, in points; the user drags it.
+    pub commentary_width: Option<f32>,
+    /// Whether the comment panel was left collapsed to its rail.
+    pub commentary_collapsed: Option<bool>,
     /// Width of the background panel when it is open, in points.
     pub background_width: Option<f32>,
     /// Whether the background panel was left collapsed to its rail.
@@ -439,19 +444,31 @@ mod tests {
     }
 
     #[test]
-    fn presets_carry_the_counter_look_and_old_ones_still_load() {
-        use shotcraft_doc::model::{CounterLabel, CounterStyle};
+    fn presets_carry_the_counter_and_comment_look_and_old_ones_still_load() {
+        use shotcraft_doc::model::{Commentary, CommentarySide, CounterLabel, CounterStyle};
         let style = CounterStyle { size: 36.0, label: CounterLabel::Letters, ..Default::default() };
-        let preset = Preset { name: "Talk".into(), background: Background::default(), counter: Some(style.clone()) };
+        let commentary = Commentary {
+            side: CommentarySide::Right,
+            width: 320.0,
+            bold: true,
+            italic: true,
+            bullet: true,
+            spacing: 12.0,
+            header: Some("Notes".into()),
+            ..Default::default()
+        };
+        let preset = Preset { name: "Talk".into(), background: Background::default(), counter: Some(style.clone()), commentary: Some(commentary.clone()) };
         let json = serde_json::to_string(&preset).unwrap();
         let back: Preset = serde_json::from_str(&json).unwrap();
         assert_eq!(back.counter, Some(style), "the preset brings the counter look back");
+        assert_eq!(back.commentary, Some(commentary), "and every comment band setting with it");
 
-        // A preset saved before counters had presets carries no `counter` key at all.
+        // A preset saved before either existed carries neither key.
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(value.as_object_mut().is_some_and(|o| o.remove("counter").is_some()), "the key is there to drop");
+        assert!(value.as_object_mut().is_some_and(|o| o.remove("counter").is_some() && o.remove("commentary").is_some()), "the keys are there to drop");
         let old: Preset = serde_json::from_value(value).unwrap();
         assert_eq!(old.counter, None, "an old preset loads with the default counter style");
+        assert_eq!(old.commentary, None, "and no comment band settings");
     }
 
     #[cfg(unix)]

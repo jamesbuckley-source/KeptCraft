@@ -204,6 +204,28 @@ pub struct Commentary {
     /// Badge colour used when the step no longer has a counter, or matching is off.
     #[serde(default = "badge_default")]
     pub badge: Color32,
+    /// A title over the comments; `None` leaves it out.
+    #[serde(default)]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    /// Start each typed line with a bullet.
+    #[serde(default)]
+    pub bullet: bool,
+    /// Gap between the header and each step, in base pixels.
+    #[serde(default = "spacing_default")]
+    pub spacing: f32,
+}
+
+fn spacing_default() -> f32 {
+    8.0
+}
+
+/// The header a fresh comment band starts with.
+pub fn commentary_header() -> String {
+    "Comments".to_owned()
 }
 
 fn badge_default() -> Color32 {
@@ -222,6 +244,11 @@ impl Default for Commentary {
             width: 0.0,
             match_counter: true,
             badge: badge_default(),
+            header: None,
+            bold: false,
+            italic: false,
+            bullet: false,
+            spacing: spacing_default(),
         }
     }
 }

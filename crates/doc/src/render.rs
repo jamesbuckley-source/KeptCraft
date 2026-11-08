@@ -113,6 +113,37 @@ struct BandLayout {
     line_step: f32,
     indent: f32,
     badge_r: f32,
+    /// The band's title line, and the height it takes above the comments.
+    header: Option<String>,
+    header_step: f32,
+    /// Space between the header and each step, in output pixels.
+    gap: f32,
+}
+
+/// The text of one step as the band shows it, bulleted when the band asks for bullets.
+fn commentary_text(commentary: &Commentary, entry: &crate::model::CommentEntry) -> String {
+    let text = entry.text.trim();
+    if !commentary.bullet {
+        return text.to_owned();
+    }
+    text.lines().map(|line| format!("•  {}", line.trim())).collect::<Vec<_>>().join("\n")
+}
+
+/// Draw band text, faking the bold and italic the bundled font has no faces for.
+fn draw_band_text(out: &mut Pixmap, text: &str, size: f32, origin: Pos2, color: Color32, commentary: &Commentary) {
+    let Some(path) = fonts::text_path(text, size, origin) else { return };
+    let path = if commentary.italic {
+        // Shear towards the right above the text's own origin.
+        let shear = 0.2;
+        path.clone().transform(Transform::from_row(1.0, 0.0, -shear, 1.0, shear * origin.y, 0.0)).unwrap_or(path)
+    } else {
+        path
+    };
+    out.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+    if commentary.bold {
+        // A second pass a hair to the right thickens the strokes.
+        out.fill_path(&path, &paint(color), FillRule::Winding, Transform::from_translate(size * 0.035, 0.0), None);
+    }
 }
 
 /// Each step's badge colour and label, taken from the counters already on the image.
@@ -138,6 +169,8 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
     let line_step = size * 1.55;
     let badge_r = size * 0.62;
     let indent = badge_r * 2.0 + size * 0.45;
+    let header = commentary.header.as_ref().map(|h| h.trim().to_owned()).filter(|h| !h.is_empty());
+    let header_step = if header.is_some() { size * 1.9 } else { 0.0 };
     let steps = |avail: f32| -> Vec<BandStep> {
         filled
             .iter()
@@ -148,12 +181,17 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
                     _ => commentary.badge,
                 };
                 let label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
-                BandStep { label, color, lines: fonts::wrap_lines(entry.text.trim(), size, avail) }
+                let text = commentary_text(commentary, entry);
+                BandStep { label, color, lines: fonts::wrap_lines(&text, size, avail) }
             })
             .collect()
     };
     let total_lines = |steps: &[BandStep]| steps.iter().map(|st| st.lines.len()).sum::<usize>();
-    let cross = |lines: usize| 2.0 * pad + lines as f32 * line_step;
+    // A gap between neighbours, and one under the header when there is one.
+    let has_header = header.is_some();
+    let gaps = move |steps: &[BandStep]| steps.len().saturating_sub(1) + usize::from(has_header);
+    let gap = commentary.spacing.max(0.0) * s;
+    let cross = |lines: usize, gaps: usize| 2.0 * pad + header_step + lines as f32 * line_step + gap * gaps as f32;
 
     let horizontal = commentary.side.horizontal();
     let (steps, fixed_width) = if horizontal {
@@ -171,7 +209,7 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
         for i in 0..=TRIES {
             let width = min_w + (max_w - min_w) * f32::from(i) / f32::from(TRIES);
             let candidate = steps((width - 2.0 * pad - indent).max(size * 4.0));
-            if cross(total_lines(&candidate)) <= image.y || i == TRIES {
+            if cross(total_lines(&candidate), gaps(&candidate)) <= image.y || i == TRIES {
                 chosen = Some(candidate);
                 break;
             }
@@ -180,8 +218,22 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
     };
     let thickness = steps.iter().flat_map(|st| st.lines.iter()).map(|line| fonts::measure(line, size).x).fold(0.0, f32::max);
 
-    let mut layout = BandLayout { out: Vec2::ZERO, image_at: Vec2::ZERO, band_at: Vec2::ZERO, band: Vec2::ZERO, size, pad, line_step, indent, badge_r, steps };
-    let band_cross = cross(total_lines(&layout.steps)).ceil();
+    let mut layout = BandLayout {
+        out: Vec2::ZERO,
+        image_at: Vec2::ZERO,
+        band_at: Vec2::ZERO,
+        band: Vec2::ZERO,
+        size,
+        pad,
+        line_step,
+        indent,
+        badge_r,
+        header,
+        header_step,
+        gap,
+        steps,
+    };
+    let band_cross = cross(total_lines(&layout.steps), gaps(&layout.steps)).ceil();
     match commentary.side {
         CommentarySide::Top => {
             layout.band = vec2(image.x, band_cross);
@@ -218,7 +270,17 @@ fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) ->
 
     let mut top = layout.band_at.y + layout.pad;
     let x = layout.band_at.x + layout.pad;
-    for step in &layout.steps {
+    if let Some(header) = &layout.header {
+        // A header reads as a title: always bold, a touch larger than the comments.
+        let title = Commentary { bold: true, ..commentary.clone() };
+        draw_band_text(&mut out, header, layout.size * 1.15, pos2(x, top), commentary.text_color, &title);
+        top += layout.header_step;
+    }
+    let gap = layout.gap;
+    for (i, step) in layout.steps.iter().enumerate() {
+        if i > 0 || layout.header.is_some() {
+            top += gap;
+        }
         let badge_at = pos2(x + layout.badge_r, top + layout.size * 0.6);
         if let Some(path) = PathBuilder::from_circle(badge_at.x, badge_at.y, layout.badge_r) {
             out.fill_path(&path, &paint(step.color), FillRule::Winding, Transform::identity(), None);
@@ -230,9 +292,7 @@ fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) ->
             out.fill_path(&path, &paint(contrast_on(step.color)), FillRule::Winding, Transform::identity(), None);
         }
         for line in &step.lines {
-            if let Some(path) = fonts::text_path(line, layout.size, pos2(x + layout.indent, top)) {
-                out.fill_path(&path, &paint(commentary.text_color), FillRule::Winding, Transform::identity(), None);
-            }
+            draw_band_text(&mut out, line, layout.size, pos2(x + layout.indent, top), commentary.text_color, commentary);
             top += layout.line_step;
         }
     }
@@ -1022,6 +1082,49 @@ mod tests {
         assert!(right.width() > 60);
         assert_eq!(right.get_pixel(right.width() - 1, 1).0, band, "the band is right of the image");
         assert_eq!(right.get_pixel(0, 20).0, shot);
+    }
+
+    #[test]
+    fn the_band_takes_a_header_and_the_space_between_comments() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(120, 60, image::Rgba([10, 10, 10, 255])));
+        let entries = vec![crate::model::CommentEntry { n: 1, text: "one".into() }, crate::model::CommentEntry { n: 2, text: "two".into() }];
+        let tight = Commentary { size: 10.0, padding: 4.0, spacing: 0.0, entries, ..Default::default() };
+        doc.commentary = Some(tight.clone());
+        let tight_h = crate::render::output_size(&doc, &RenderOpts::default()).y;
+
+        doc.commentary = Some(Commentary { spacing: 12.0, ..tight.clone() });
+        let spaced_h = crate::render::output_size(&doc, &RenderOpts::default()).y;
+        assert_eq!(spaced_h - tight_h, 12.0, "one gap between the two comments");
+
+        doc.commentary = Some(Commentary { header: Some("Comments".into()), spacing: 0.0, ..tight.clone() });
+        let headed_h = crate::render::output_size(&doc, &RenderOpts::default()).y;
+        assert!(headed_h > tight_h + 10.0, "the header adds a line: {headed_h} vs {tight_h}");
+    }
+
+    #[test]
+    fn bold_thickens_the_band_and_italic_slants_it() {
+        let ink = |commentary: Commentary| {
+            let mut doc = Doc::new(RgbaImage::from_pixel(160, 40, image::Rgba([10, 10, 10, 255])));
+            doc.commentary = Some(commentary);
+            let out = flatten(&doc).unwrap();
+            let mut pixels = 0;
+            for y in 40..out.height() {
+                for x in 0..out.width() {
+                    if out.get_pixel(x, y).0[0] > 120 {
+                        pixels += 1;
+                    }
+                }
+            }
+            (out, pixels)
+        };
+        let entries = vec![crate::model::CommentEntry { n: 1, text: "Hello world".into() }];
+        let plain = Commentary { size: 14.0, padding: 6.0, entries: entries.clone(), ..Default::default() };
+        let (plain_img, plain_ink) = ink(plain.clone());
+        let (bold_img, bold_ink) = ink(Commentary { bold: true, ..plain.clone() });
+        assert!(bold_ink > plain_ink, "bold lays down more ink: {bold_ink} vs {plain_ink}");
+        let (italic_img, _) = ink(Commentary { italic: true, ..plain });
+        assert_ne!(plain_img.as_raw(), italic_img.as_raw(), "italic slants the lines");
+        assert_eq!(plain_img.width(), bold_img.width(), "neither formatting option changes the size");
     }
 
     #[test]

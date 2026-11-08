@@ -51,7 +51,9 @@ const MAX_ZOOM: f32 = 16.0;
 
 /// Room the background panel opens at: wide enough for a preset name and its two buttons.
 const BACKGROUND_WIDTH: f32 = 272.0;
-/// Width of the collapsed rail the panel folds down to.
+/// Room the comment panel opens at.
+const COMMENTARY_WIDTH: f32 = 300.0;
+/// Width of the collapsed rail the panels fold down to.
 const RAIL_WIDTH: f32 = 40.0;
 
 const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
@@ -105,6 +107,15 @@ enum CropAction {
     Cancel,
     Reset,
     Aspect(Option<(u32, u32)>),
+}
+
+/// What the colour window does when it closes.
+enum ColourAction {
+    Use(Color32),
+    Add(Color32),
+    Save(Color32),
+    Delete,
+    Cancel,
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +182,9 @@ struct Editor {
     gradient_draft: Option<OwnedGradient>,
     /// Which of the user's gradients the draft rewrites, when it was opened from a tile.
     gradient_edit: Option<usize>,
+    /// The solid colour being chosen, and the palette entry it rewrites when editing.
+    colour_draft: Option<Color32>,
+    colour_edit: Option<usize>,
     settings: Settings,
     tool: Tool,
     color: Color32,
@@ -212,7 +226,11 @@ struct Editor {
     /// The preset last loaded or saved, so a tweak can be written back to it.
     preset_active: Option<String>,
     /// Height of the comment panel, as last dragged.
-    commentary_height: f32,
+    commentary_width: f32,
+    /// The comment panel is a rail until it is opened again.
+    commentary_collapsed: bool,
+    /// The comment panel is on screen.
+    show_commentary: bool,
     /// Width of the background panel, as last dragged.
     background_width: f32,
     /// The background panel is a rail until it is opened again.
@@ -228,19 +246,21 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
     let scale = capture::primary_scale();
     let natural = vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0);
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
-    let size = natural.max(vec2(980.0, 640.0)).min(screen.size() * 0.88);
+    let size = natural.max(vec2(1260.0, 720.0)).min(screen.size() * 0.88);
     let project_path = path.as_ref().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT))).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
     let title = match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
         Some(name) => format!("{} — ShotCraft4Kept", name.to_string_lossy()),
         None => "ShotCraft4Kept — Annotate".to_owned(),
     };
-    let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(760.0, 480.0)).with_drag_and_drop(true);
+    let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(1040.0, 520.0)).with_drag_and_drop(true);
     let settings = Settings::load();
     let color = settings.palette.first().map_or(Color32::from_rgb(255, 59, 48), |c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
     let show_background = doc.background.is_some();
     let state = State::load();
-    let commentary_height = state.commentary_height.unwrap_or(150.0);
+    let commentary_width = state.commentary_width.unwrap_or(COMMENTARY_WIDTH);
+    let commentary_collapsed = state.commentary_collapsed.unwrap_or(false);
+    let show_commentary = doc.commentary.is_some();
     let background_width = state.background_width.unwrap_or(BACKGROUND_WIDTH);
     let background_collapsed = state.background_collapsed.unwrap_or(false);
     let mut recent = state.recent_files;
@@ -255,6 +275,8 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         recent,
         gradient_draft: None,
         gradient_edit: None,
+        colour_draft: None,
+        colour_edit: None,
         settings,
         tool: Tool::Arrow,
         color,
@@ -291,7 +313,9 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         allow_close: false,
         preset_name: String::new(),
         preset_active: None,
-        commentary_height,
+        commentary_width,
+        commentary_collapsed,
+        show_commentary,
         background_width,
         background_collapsed,
         panels_dirty: false,
@@ -862,6 +886,16 @@ impl Editor {
         }
     }
 
+    /// Show or hide the comment panel, starting a band the first time it opens.
+    fn toggle_commentary(&mut self) {
+        self.show_commentary = !self.show_commentary;
+        if self.show_commentary && self.doc.commentary.is_none() {
+            self.checkpoint();
+            self.doc.commentary = Some(Commentary::default());
+            self.touch();
+        }
+    }
+
     fn toggle_background(&mut self) {
         // A folded panel opens first; pressing again hides it.
         if self.show_background && self.background_collapsed {
@@ -978,9 +1012,14 @@ impl Editor {
                     }
                 });
                 ui.separator();
+                let mut commentary = self.show_commentary;
+                if ui.checkbox(&mut commentary, "Commentary").on_hover_text("The steps' comments, in the panel on the right").changed() {
+                    self.toggle_commentary();
+                }
+                ui.separator();
                 // The cluster is the last thing added to the row, so it only draws when the tools
                 // and the actions above have left room for it.
-                if ui.available_width() > 132.0 {
+                if ui.available_width() > 120.0 {
                     self.zoom_control(ui);
                 }
             });
@@ -996,7 +1035,7 @@ impl Editor {
             }
             let mut zoom = self.zoom;
             let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
-            if ui.add_sized([60.0, 16.0], slider).on_hover_text("Zoom").changed() {
+            if ui.add_sized([44.0, 16.0], slider).on_hover_text("Zoom").changed() {
                 self.zoom_to(zoom, None);
             }
             if tiny_button(ui, icon::PLUS, "Zoom in") {
@@ -1335,11 +1374,11 @@ impl Editor {
         let active = self.preset_active.clone().filter(|name| names.iter().any(|n| n == name));
         // Anything the user changed since the preset was loaded can be written back to it.
         let dirty = active.as_ref().is_some_and(|name| {
-            self.settings
-                .presets
-                .iter()
-                .find(|p| &p.name == name)
-                .is_some_and(|p| self.doc.background.as_ref() != Some(&p.background) || p.counter.as_ref() != Some(&self.counter_style))
+            self.settings.presets.iter().find(|p| &p.name == name).is_some_and(|p| {
+                self.doc.background.as_ref() != Some(&p.background)
+                    || p.counter.as_ref() != Some(&self.counter_style)
+                    || p.commentary != self.commentary_style()
+            })
         });
         ui.horizontal(|ui| {
             let shown = match &active {
@@ -1352,10 +1391,17 @@ impl Editor {
                     if ui.selectable_label(false, name).clicked() {
                         let bg = self.settings.presets[i].background.clone();
                         let counter = self.settings.presets[i].counter.clone();
+                        let commentary = self.settings.presets[i].commentary.clone();
                         self.checkpoint();
                         self.doc.background = Some(bg);
                         if let Some(counter) = counter {
                             self.counter_style = counter;
+                        }
+                        if let Some(style) = commentary {
+                            // The preset carries the band's look; the comments already written stay.
+                            let entries = self.doc.commentary.as_ref().map(|c| c.entries.clone()).unwrap_or_default();
+                            self.doc.commentary = Some(Commentary { entries, ..style });
+                            self.show_commentary = true;
                         }
                         self.preset_active = Some(name.clone());
                         self.touch();
@@ -1374,10 +1420,12 @@ impl Editor {
                 && let Some(background) = self.doc.background.clone()
             {
                 let counter = self.counter_style.clone();
+                let commentary = self.commentary_style();
                 let saved = self.update_settings(|s| {
                     if let Some(p) = s.presets.iter_mut().find(|p| p.name == name) {
                         p.background = background;
                         p.counter = Some(counter);
+                        p.commentary = commentary;
                     }
                 });
                 if saved {
@@ -1410,9 +1458,10 @@ impl Editor {
             {
                 let name = self.preset_name.trim().to_owned();
                 let counter = self.counter_style.clone();
+                let commentary = self.commentary_style();
                 let saved = self.update_settings(|s| {
                     s.presets.retain(|p| p.name != name);
-                    s.presets.push(Preset { name: name.clone(), background, counter: Some(counter) });
+                    s.presets.push(Preset { name: name.clone(), background, counter: Some(counter), commentary });
                 });
                 if saved {
                     self.preset_name.clear();
@@ -1510,34 +1559,66 @@ impl Editor {
             self.set_fill(fill);
         }
         section(ui, "Solid Colors");
+        let palette = self.settings.palette.clone();
+        let mut remove_colour = None;
+        let mut edit_colour = None;
+        let mut open_custom = false;
         ui.horizontal_wrapped(|ui| {
-            for c in [
-                [255, 255, 255, 255],
-                [242, 242, 247, 255],
-                [28, 28, 30, 255],
-                [10, 132, 255, 255],
-                [52, 199, 89, 255],
-                [255, 149, 0, 255],
-                [255, 59, 48, 255],
-                [175, 82, 222, 255],
-            ] {
-                let col = swatch_color(c);
-                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            for (i, c) in palette.iter().enumerate() {
+                let col = swatch_color(*c);
+                let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
                 ui.painter().circle_filled(r.center(), 11.0, col);
                 ui.painter().circle_stroke(r.center(), 11.0, ui.visuals().widgets.noninteractive.bg_stroke);
-                if resp.clicked() {
+                if fill == Some(BgFill::Solid(col)) {
+                    ui.painter().circle_stroke(r.center(), 13.0, Stroke::new(2.0, theme::ACCENT));
+                }
+                // A little x in the corner, like the gradient tiles.
+                let badge = Rect::from_center_size(r.right_top() + vec2(-2.0, 2.0), Vec2::splat(13.0));
+                let del = ui.interact(badge, ui.id().with(("delete-colour", i)), Sense::click());
+                ui.painter().circle_filled(badge.center(), 6.5, Color32::from_black_alpha(170));
+                ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon::X, FontId::proportional(8.0), Color32::WHITE);
+                let resp = resp.on_hover_text("Double-click to edit, or use the x to remove it");
+                if del.on_hover_text("Remove this colour").clicked() {
+                    remove_colour = Some(i);
+                } else if resp.double_clicked() {
+                    edit_colour = Some((i, col));
+                } else if resp.clicked() {
                     self.set_fill(BgFill::Solid(col));
                 }
             }
-            // A plain colour of your own: it lives in the background, so a preset keeps it too.
-            let mut custom = match &fill {
-                Some(BgFill::Solid(c)) => *c,
-                _ => Color32::WHITE,
-            };
-            if ui.color_edit_button_srgba(&mut custom).on_hover_text("Custom colour").changed() {
-                self.set_fill(BgFill::Solid(custom));
+            // Any colour of your own: a circle with a plus, as tall as the swatches beside it.
+            let (r, plus) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+            let ring = ui.visuals().widgets.inactive.fg_stroke.color;
+            ui.painter().circle_stroke(r.center(), 11.0, Stroke::new(1.5, ring));
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(12.0), ring);
+            if plus.on_hover_text("Pick a colour of your own").clicked() {
+                open_custom = true;
             }
         });
+        if let Some(i) = remove_colour {
+            let removed = palette.get(i).copied();
+            self.update_settings(|s| {
+                if i < s.palette.len() {
+                    s.palette.remove(i);
+                }
+            });
+            if let Some([r, g, b, a]) = removed
+                && fill == Some(BgFill::Solid(Color32::from_rgba_unmultiplied(r, g, b, a)))
+            {
+                self.set_fill(BgFill::Transparent);
+            }
+        }
+        if let Some((i, colour)) = edit_colour {
+            self.colour_edit = Some(i);
+            self.colour_draft = Some(colour);
+        }
+        if open_custom {
+            self.colour_edit = None;
+            self.colour_draft = Some(match &fill {
+                Some(BgFill::Solid(c)) => *c,
+                _ => Color32::WHITE,
+            });
+        }
         section(ui, "Effects");
         ui.horizontal_wrapped(|ui| {
             if ui.selectable_label(fill == Some(BgFill::Blurred), format!("{} Blurred", icon::DROP)).clicked() {
@@ -1704,7 +1785,99 @@ impl Editor {
         }
     }
 
-    /// The band beside the image: one comment per numbered step, with the strip's own colours.
+    /// The colour picker behind the Solid Colors + circle and a double click on a swatch. A window
+    /// for the same reason as the gradient editor: a nested colour picker closes a popup host.
+    fn colour_window(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.colour_draft else { return };
+        let editing = self.colour_edit;
+        let mut open = true;
+        let mut action = None;
+        egui::Window::new(if editing.is_some() { "Edit colour" } else { "New colour" })
+            .id(egui::Id::new("colour-editor"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .default_width(240.0)
+            .show(ctx, |ui| {
+                let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                ui.painter().rect_filled(preview, 6, draft);
+                ui.add_space(4.0);
+                ui.color_edit_button_srgba(&mut draft);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if editing.is_some() {
+                        if ui.button("Save").clicked() {
+                            action = Some(ColourAction::Save(draft));
+                        }
+                        if ui.button(format!("{} Delete", icon::TRASH)).clicked() {
+                            action = Some(ColourAction::Delete);
+                        }
+                    } else {
+                        if ui.button("Use").clicked() {
+                            action = Some(ColourAction::Use(draft));
+                        }
+                        if ui.button("Add to Colors").clicked() {
+                            action = Some(ColourAction::Add(draft));
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = Some(ColourAction::Cancel);
+                    }
+                });
+            });
+        self.colour_draft = if open && action.is_none() { Some(draft) } else { None };
+        match action {
+            Some(ColourAction::Use(colour)) => {
+                self.colour_edit = None;
+                self.set_fill(BgFill::Solid(colour));
+            }
+            Some(ColourAction::Add(colour)) => {
+                let rgba = colour.to_array();
+                self.update_settings(|s| {
+                    if !s.palette.contains(&rgba) {
+                        s.palette.push(rgba);
+                    }
+                });
+                self.colour_edit = None;
+                self.set_fill(BgFill::Solid(colour));
+            }
+            Some(ColourAction::Save(colour)) => {
+                if let Some(i) = editing {
+                    let rgba = colour.to_array();
+                    self.update_settings(|s| {
+                        if let Some(slot) = s.palette.get_mut(i) {
+                            *slot = rgba;
+                        }
+                    });
+                }
+                self.colour_edit = None;
+                self.set_fill(BgFill::Solid(colour));
+            }
+            Some(ColourAction::Delete) => {
+                if let Some(i) = editing {
+                    self.update_settings(|s| {
+                        if i < s.palette.len() {
+                            s.palette.remove(i);
+                        }
+                    });
+                }
+                self.colour_edit = None;
+            }
+            Some(ColourAction::Cancel) | None => {
+                self.colour_edit = None;
+            }
+        }
+    }
+
+    /// The comment band's look, ready to store in a preset: its settings without the comments.
+    fn commentary_style(&self) -> Option<Commentary> {
+        self.doc.commentary.clone().map(|mut c| {
+            c.entries.clear();
+            c
+        })
+    }
+
+    /// The comment panel on the right: formatting, the header, the band's look, and one box per step.
     fn commentary_panel(&mut self, ui: &mut egui::Ui) {
         let counters: Vec<(u32, String)> = self
             .doc
@@ -1715,70 +1888,107 @@ impl Editor {
                 _ => None,
             })
             .collect();
+        let Some(mut c) = self.doc.commentary.clone() else {
+            ui.label(RichText::new("No comments yet.").color(ui.visuals().weak_text_color()));
+            return;
+        };
         let mut changed = false;
         let mut picked = None;
-        let mut on = self.doc.commentary.is_some();
+
+        // B / I / bullets, for the whole band.
         ui.horizontal(|ui| {
-            if ui.checkbox(&mut on, "Commentary").on_hover_text("One line per numbered step, added beside the image").changed() {
-                self.checkpoint();
-                self.doc.commentary = on.then(Commentary::default);
+            if ui.selectable_label(c.bold, RichText::new("B").strong()).on_hover_text("Bold").clicked() {
+                c.bold = !c.bold;
                 changed = true;
             }
-            if counters.is_empty() {
-                ui.label(RichText::new("Place a numbered step to describe it here").color(ui.visuals().weak_text_color()));
+            if ui.selectable_label(c.italic, RichText::new("I").italics()).on_hover_text("Italic").clicked() {
+                c.italic = !c.italic;
+                changed = true;
             }
-            if let Some(mut c) = self.doc.commentary.clone() {
-                egui::ComboBox::from_id_salt("commentary-side").selected_text(c.side.label()).width(76.0).show_ui(ui, |ui| {
-                    for side in CommentarySide::ALL {
-                        if ui.selectable_label(c.side == side, side.label()).clicked() {
-                            c.side = side;
-                            changed = true;
-                        }
-                    }
-                });
-                if !c.side.horizontal() {
-                    ui.label("Width");
-                    changed |= ui
-                        .add(egui::DragValue::new(&mut c.width).range(0.0..=4000.0).suffix(" px").speed(4.0))
-                        .on_hover_text("How much room the comments get; 0 fits them to the image's height")
-                        .changed();
-                }
-                changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
-                ui.label("Text");
-                changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
-                ui.label("Padding");
-                changed |= ui.add(egui::DragValue::new(&mut c.padding).range(0.0..=120.0).suffix(" px")).changed();
-                changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
-                if !c.match_counter {
-                    changed |= ui.color_edit_button_srgba(&mut c.badge).on_hover_text("Badge colour").changed();
-                }
-                self.doc.commentary = Some(c);
+            if ui.selectable_label(c.bullet, "•").on_hover_text("Start every typed line with a bullet").clicked() {
+                c.bullet = !c.bullet;
+                changed = true;
             }
         });
-        if let Some(mut c) = self.doc.commentary.clone() {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                for (n, label) in &counters {
-                    ui.horizontal(|ui| {
-                        let badge = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
-                        if ui.add(badge).on_hover_text("Click to adjust this step").clicked() {
-                            picked = Some(*n);
-                        }
-                        let width = (ui.available_width() - 8.0).max(80.0);
-                        if ui.add(egui::TextEdit::singleline(c.entry_mut(*n)).hint_text("comment").desired_width(width)).changed() {
-                            changed = true;
-                        }
-                    });
+        ui.horizontal(|ui| {
+            let mut header = c.header.is_some();
+            if ui.checkbox(&mut header, "Header").on_hover_text("A title over the comments").changed() {
+                c.header = header.then(shotcraft_engine::doc::model::commentary_header);
+                changed = true;
+            }
+            if let Some(text) = &mut c.header {
+                let width = (ui.available_width() - 4.0).max(80.0);
+                changed |= ui.add(egui::TextEdit::singleline(text).hint_text("Comments").desired_width(width)).changed();
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Side");
+            egui::ComboBox::from_id_salt("commentary-side").selected_text(c.side.label()).width(74.0).show_ui(ui, |ui| {
+                for side in CommentarySide::ALL {
+                    if ui.selectable_label(c.side == side, side.label()).clicked() {
+                        c.side = side;
+                        changed = true;
+                    }
                 }
             });
-            if changed {
-                self.doc.commentary = Some(c);
+            if !c.side.horizontal() {
+                ui.label("Width");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut c.width).range(0.0..=4000.0).suffix(" px").speed(4.0))
+                    .on_hover_text("How much room the comments get; 0 fits them to the image's height")
+                    .changed();
             }
+        });
+        ui.horizontal(|ui| {
+            changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
+            ui.label("Text");
+            changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Space");
+            changed |= ui
+                .add(egui::DragValue::new(&mut c.spacing).range(0.0..=120.0).suffix(" px"))
+                .on_hover_text("Gap between the header and each comment")
+                .changed();
+            ui.label("Padding");
+            changed |= ui.add(egui::DragValue::new(&mut c.padding).range(0.0..=120.0).suffix(" px")).changed();
+        });
+        ui.horizontal(|ui| {
+            changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
+            if !c.match_counter {
+                changed |= ui.color_edit_button_srgba(&mut c.badge).on_hover_text("Badge colour").changed();
+            }
+        });
+        ui.separator();
+
+        if counters.is_empty() {
+            ui.label(RichText::new("Place a numbered step to describe it here").color(ui.visuals().weak_text_color()));
+        }
+        // One box per step: as tall as its text, up to ten lines, then it scrolls.
+        let ten_lines = ui.text_style_height(&egui::TextStyle::Body) * 10.0 + 10.0;
+        for (n, label) in &counters {
+            ui.horizontal(|ui| {
+                let badge = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
+                if ui.add(badge).on_hover_text("Click to adjust this step").clicked() {
+                    picked = Some(*n);
+                }
+                ui.label(RichText::new(format!("Step {label}")).weak());
+            });
+            egui::ScrollArea::vertical().id_salt(("comment-scroll", *n)).max_height(ten_lines).auto_shrink([false, true]).show(ui, |ui| {
+                let width = ui.available_width();
+                if ui.add(egui::TextEdit::multiline(c.entry_mut(*n)).hint_text("comment").desired_width(width).desired_rows(1)).changed() {
+                    changed = true;
+                }
+            });
+            ui.add_space(2.0);
+        }
+        if changed {
+            self.doc.commentary = Some(c);
+            self.touch();
         }
         if let Some(n) = picked {
             self.select_step(n);
-        }
-        if changed {
-            self.touch();
         }
     }
 
@@ -2451,20 +2661,38 @@ impl eframe::App for Editor {
             });
         }
         egui::Panel::bottom("status").exact_size(32.0).show(root, |ui| self.status_bar(ui));
-        if self.tool == Tool::Counter && self.crop.is_none() {
-            // Resizable by its top edge; the height it is dragged to is remembered between sessions.
-            egui::Panel::bottom("commentary").exact_size(self.commentary_height).show(root, |ui| {
-                let strip = Rect::from_min_max(ui.max_rect().left_top(), pos2(ui.max_rect().right(), ui.max_rect().top() + 6.0));
-                let grip = ui.interact(strip, ui.id().with("commentary-grip"), Sense::drag());
-                if grip.hovered() || grip.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                }
-                if grip.dragged() {
-                    self.commentary_height = (self.commentary_height - grip.drag_delta().y).clamp(96.0, 700.0);
-                    self.panels_dirty = true;
-                }
-                self.commentary_panel(ui);
-            });
+        if self.show_commentary && self.crop.is_none() {
+            if self.commentary_collapsed {
+                // A rail with one way back out. Its own id keeps the open panel's width intact.
+                egui::Panel::right("commentary-rail").exact_size(RAIL_WIDTH).show(root, |ui| {
+                    ui.add_space(4.0);
+                    if tiny_button(ui, icon::CARET_LEFT, "Open the commentary panel") {
+                        self.commentary_collapsed = false;
+                        State::update(|s| s.commentary_collapsed = Some(false));
+                    }
+                });
+            } else {
+                egui::Panel::right("commentary").exact_size(self.commentary_width).show(root, |ui| {
+                    // Dragging the panel's inner left edge resizes it; the width is remembered.
+                    let edge = Rect::from_min_max(ui.max_rect().left_top(), pos2(ui.max_rect().left() + 6.0, ui.max_rect().bottom()));
+                    let grip = ui.interact(edge, ui.id().with("commentary-grip"), Sense::drag());
+                    if grip.hovered() || grip.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    }
+                    if grip.dragged() {
+                        self.commentary_width = (self.commentary_width - grip.drag_delta().x).clamp(220.0, 640.0);
+                        self.panels_dirty = true;
+                    }
+                    ui.horizontal(|ui| {
+                        if tiny_button(ui, icon::CARET_RIGHT, "Collapse this panel") {
+                            self.commentary_collapsed = true;
+                            State::update(|s| s.commentary_collapsed = Some(true));
+                        }
+                        ui.label(RichText::new("Commentary").strong());
+                    });
+                    egui::ScrollArea::vertical().show(ui, |ui| self.commentary_panel(ui));
+                });
+            }
         }
         if self.show_background && self.crop.is_none() {
             if self.background_collapsed {
@@ -2495,15 +2723,16 @@ impl eframe::App for Editor {
         // Panel sizes are written once the drag is over, not on every frame of it.
         if self.panels_dirty && !ctx.input(|i| i.pointer.any_down()) {
             self.panels_dirty = false;
-            let (height, width) = (self.commentary_height, self.background_width);
+            let (commentary, width) = (self.commentary_width, self.background_width);
             State::update(|s| {
-                s.commentary_height = Some(height);
+                s.commentary_width = Some(commentary);
                 s.background_width = Some(width);
             });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(root, |ui| self.canvas(ui));
 
         self.gradient_window(ctx);
+        self.colour_window(ctx);
 
         if self.confirm_close {
             egui::Modal::new(egui::Id::new("confirm-close")).show(ctx, |ui| {

@@ -156,8 +156,12 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
     let cross = |lines: usize| 2.0 * pad + lines as f32 * line_step;
 
     let horizontal = commentary.side.horizontal();
-    let steps = if horizontal {
-        steps((image.x - 2.0 * pad - indent).max(size * 4.0))
+    let (steps, fixed_width) = if horizontal {
+        (steps((image.x - 2.0 * pad - indent).max(size * 4.0)), None)
+    } else if commentary.width > 0.0 {
+        // An explicit width wins; the comments wrap inside it.
+        let width = (commentary.width * s).max(2.0 * pad + indent + size * 4.0);
+        (steps((width - 2.0 * pad - indent).max(size * 4.0)), Some(width))
     } else {
         // Widen the column until the comments fit the image's height, then keep it as narrow as works.
         let min_w = 2.0 * pad + indent + size * 6.0;
@@ -172,7 +176,7 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
                 break;
             }
         }
-        chosen.unwrap_or_default()
+        (chosen.unwrap_or_default(), None)
     };
     let thickness = steps.iter().flat_map(|st| st.lines.iter()).map(|line| fonts::measure(line, size).x).fold(0.0, f32::max);
 
@@ -191,7 +195,7 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
         }
         CommentarySide::Left | CommentarySide::Right => {
             // A column keeps the image's height and centres the image if the text needs more.
-            let band_width = (2.0 * pad + indent + thickness).ceil();
+            let band_width = fixed_width.unwrap_or(2.0 * pad + indent + thickness).ceil();
             let height = image.y.max(band_cross);
             layout.band = vec2(band_width, height);
             layout.out = vec2(image.x + band_width, height);
@@ -1018,6 +1022,22 @@ mod tests {
         assert!(right.width() > 60);
         assert_eq!(right.get_pixel(right.width() - 1, 1).0, band, "the band is right of the image");
         assert_eq!(right.get_pixel(0, 20).0, shot);
+    }
+
+    #[test]
+    fn a_side_band_takes_the_width_it_is_given() {
+        use crate::model::CommentarySide;
+        let mut doc = Doc::new(RgbaImage::from_pixel(200, 120, image::Rgba([10, 10, 10, 255])));
+        let entries = vec![crate::model::CommentEntry { n: 1, text: "step".into() }];
+        let auto = Commentary { size: 12.0, padding: 6.0, side: CommentarySide::Right, entries, ..Default::default() };
+        doc.commentary = Some(auto.clone());
+        let fitted = crate::render::output_size(&doc, &RenderOpts::default());
+        assert!(fitted.x < 500.0, "the auto band stays narrow: {fitted:?}");
+
+        doc.commentary = Some(Commentary { width: 300.0, ..auto });
+        let wide = crate::render::output_size(&doc, &RenderOpts::default());
+        assert_eq!(wide, vec2(500.0, 120.0), "the column is exactly as wide as asked");
+        assert_eq!(flatten(&doc).unwrap().width(), 500);
     }
 
     #[test]

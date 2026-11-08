@@ -195,6 +195,9 @@ pub struct Commentary {
     /// Edge of the image the band is attached to.
     #[serde(default)]
     pub side: CommentarySide,
+    /// Width of a side band in base pixels; 0 fits the comments to the image's height.
+    #[serde(default)]
+    pub width: f32,
     /// Ring each step in the colour of its own counter instead of [`Commentary::badge`].
     #[serde(default = "yes")]
     pub match_counter: bool,
@@ -216,6 +219,7 @@ impl Default for Commentary {
             padding: 24.0,
             entries: Vec::new(),
             side: CommentarySide::Bottom,
+            width: 0.0,
             match_counter: true,
             badge: badge_default(),
         }
@@ -967,6 +971,7 @@ mod tests {
         let old = r#"{"background":[28,28,30,255],"text_color":[255,255,255,255],"size":22.0,"padding":24.0,"entries":[]}"#;
         let commentary: Commentary = serde_json::from_str(old).unwrap();
         assert_eq!(commentary.side, CommentarySide::Bottom, "a band saved before sides existed stays under the image");
+        assert_eq!(commentary.width, 0.0, "and it fits its own width");
         assert!(commentary.match_counter, "badges follow their counters by default");
     }
 

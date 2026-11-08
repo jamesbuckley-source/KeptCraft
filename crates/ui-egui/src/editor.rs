@@ -49,6 +49,11 @@ enum Tool {
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 16.0;
 
+/// Room the background panel opens at: wide enough for a preset name and its two buttons.
+const BACKGROUND_WIDTH: f32 = 272.0;
+/// Width of the collapsed rail the panel folds down to.
+const RAIL_WIDTH: f32 = 40.0;
+
 const TOOLS: [(Tool, theme::ToolIcon, &str, Key); 12] = [
     (Tool::Select, theme::ToolIcon::Glyph(icon::CURSOR), "Select (V)", Key::V),
     (Tool::Rect, theme::ToolIcon::Glyph(icon::SQUARE), "Rectangle (R)", Key::R),
@@ -206,6 +211,14 @@ struct Editor {
     preset_name: String,
     /// The preset last loaded or saved, so a tweak can be written back to it.
     preset_active: Option<String>,
+    /// Height of the comment panel, as last dragged.
+    commentary_height: f32,
+    /// Width of the background panel, as last dragged.
+    background_width: f32,
+    /// The background panel is a rail until it is opened again.
+    background_collapsed: bool,
+    /// A panel size changed during a drag and still needs writing to the state file.
+    panels_dirty: bool,
 }
 
 /// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
@@ -226,7 +239,11 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
     let settings = Settings::load();
     let color = settings.palette.first().map_or(Color32::from_rgb(255, 59, 48), |c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
     let show_background = doc.background.is_some();
-    let mut recent = State::load().recent_files;
+    let state = State::load();
+    let commentary_height = state.commentary_height.unwrap_or(150.0);
+    let background_width = state.background_width.unwrap_or(BACKGROUND_WIDTH);
+    let background_collapsed = state.background_collapsed.unwrap_or(false);
+    let mut recent = state.recent_files;
     if let Some(path) = path.as_ref() {
         remember_recent(&mut recent, path);
     }
@@ -274,6 +291,10 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         allow_close: false,
         preset_name: String::new(),
         preset_active: None,
+        commentary_height,
+        background_width,
+        background_collapsed,
+        panels_dirty: false,
     })
 }
 
@@ -842,6 +863,12 @@ impl Editor {
     }
 
     fn toggle_background(&mut self) {
+        // A folded panel opens first; pressing again hides it.
+        if self.show_background && self.background_collapsed {
+            self.background_collapsed = false;
+            State::update(|s| s.background_collapsed = Some(false));
+            return;
+        }
         self.show_background = !self.show_background;
         if self.show_background && self.doc.background.is_none() {
             self.checkpoint();
@@ -1320,7 +1347,7 @@ impl Editor {
                 Some(name) => name.clone(),
                 None => "Brand preset".to_owned(),
             };
-            egui::ComboBox::from_id_salt("preset").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("preset").selected_text(shown).width((ui.available_width() - 88.0).max(90.0)).show_ui(ui, |ui| {
                 for (i, name) in names.iter().enumerate() {
                     if ui.selectable_label(false, name).clicked() {
                         let bg = self.settings.presets[i].background.clone();
@@ -1375,7 +1402,8 @@ impl Editor {
             .on_hover_text("Delete a preset");
         });
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("Preset name").desired_width(150.0));
+            let name_width = (ui.available_width() - 42.0).max(90.0);
+            ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("Preset name").desired_width(name_width));
             let can = self.doc.background.is_some() && !self.preset_name.trim().is_empty();
             if ui.add_enabled(can, egui::Button::new(icon::PLUS)).on_hover_text("Save current background as a preset").clicked()
                 && let Some(background) = self.doc.background.clone()
@@ -1708,6 +1736,13 @@ impl Editor {
                         }
                     }
                 });
+                if !c.side.horizontal() {
+                    ui.label("Width");
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut c.width).range(0.0..=4000.0).suffix(" px").speed(4.0))
+                        .on_hover_text("How much room the comments get; 0 fits them to the image's height")
+                        .changed();
+                }
                 changed |= ui.color_edit_button_srgba(&mut c.background).on_hover_text("Band colour").changed();
                 ui.label("Text");
                 changed |= ui.add(egui::DragValue::new(&mut c.size).range(8.0..=64.0).suffix(" pt")).changed();
@@ -1721,7 +1756,7 @@ impl Editor {
             }
         });
         if let Some(mut c) = self.doc.commentary.clone() {
-            egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 for (n, label) in &counters {
                     ui.horizontal(|ui| {
                         let badge = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
@@ -2417,11 +2452,53 @@ impl eframe::App for Editor {
         }
         egui::Panel::bottom("status").exact_size(32.0).show(root, |ui| self.status_bar(ui));
         if self.tool == Tool::Counter && self.crop.is_none() {
-            egui::Panel::bottom("commentary").show(root, |ui| self.commentary_panel(ui));
+            // Resizable by its top edge; the height it is dragged to is remembered between sessions.
+            egui::Panel::bottom("commentary").exact_size(self.commentary_height).show(root, |ui| {
+                let strip = Rect::from_min_max(ui.max_rect().left_top(), pos2(ui.max_rect().right(), ui.max_rect().top() + 6.0));
+                let grip = ui.interact(strip, ui.id().with("commentary-grip"), Sense::drag());
+                if grip.hovered() || grip.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+                if grip.dragged() {
+                    self.commentary_height = (self.commentary_height - grip.drag_delta().y).clamp(96.0, 700.0);
+                    self.panels_dirty = true;
+                }
+                self.commentary_panel(ui);
+            });
         }
         if self.show_background && self.crop.is_none() {
-            egui::Panel::left("background").exact_size(232.0).resizable(false).show(root, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.background_panel(ui));
+            if self.background_collapsed {
+                // A rail with one way back out. Its own id keeps the open panel's width intact.
+                egui::Panel::left("background-rail").exact_size(RAIL_WIDTH).show(root, |ui| {
+                    ui.add_space(4.0);
+                    if tiny_button(ui, icon::CARET_RIGHT, "Open the background tools (B)") {
+                        self.background_collapsed = false;
+                        State::update(|s| s.background_collapsed = Some(false));
+                    }
+                });
+            } else {
+                let shown = egui::Panel::left("background").resizable(true).default_size(self.background_width).size_range(200.0..=560.0).show(root, |ui| {
+                    ui.add_space(2.0);
+                    if tiny_button(ui, icon::CARET_LEFT, "Collapse this panel") {
+                        self.background_collapsed = true;
+                        State::update(|s| s.background_collapsed = Some(true));
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| self.background_panel(ui));
+                });
+                let width = shown.response.rect.width();
+                if (width - self.background_width).abs() > 1.5 {
+                    self.background_width = width;
+                    self.panels_dirty = true;
+                }
+            }
+        }
+        // Panel sizes are written once the drag is over, not on every frame of it.
+        if self.panels_dirty && !ctx.input(|i| i.pointer.any_down()) {
+            self.panels_dirty = false;
+            let (height, width) = (self.commentary_height, self.background_width);
+            State::update(|s| {
+                s.commentary_height = Some(height);
+                s.background_width = Some(width);
             });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(root, |ui| self.canvas(ui));

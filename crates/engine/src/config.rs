@@ -356,6 +356,12 @@ pub struct State {
     pub recently_closed: Vec<String>,
     /// Files opened in the editor, most recent last: the File menu's Recent Files.
     pub recent_files: Vec<PathBuf>,
+    /// Height of the counter tool's comment panel, in points; the user drags it.
+    pub commentary_height: Option<f32>,
+    /// Width of the background panel when it is open, in points.
+    pub background_width: Option<f32>,
+    /// Whether the background panel was left collapsed to its rail.
+    pub background_collapsed: Option<bool>,
 }
 
 impl State {

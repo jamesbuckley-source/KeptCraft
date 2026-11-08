@@ -10,8 +10,6 @@ updates itself from this repository's releases. ShotCraft's copyright and licens
 place, and the code stays close enough to merge from upstream.
 ShotCraft is © the ShotCraft contributors under MIT OR Apache-2.0; see [`NOTICE`](NOTICE).
 
-![The KeptCraft editor with numbered steps, a callout arrow, a highlighted line and a pixelated secret key on a gradient background](assets/screenshots/editor.png)
-
 ## Features
 
 | Feature | KeptCraft |

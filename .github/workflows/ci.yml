@@ -110,12 +110,13 @@ jobs:
 
       - name: Third-party licenses are current
         run: |
-          # cargo-about copies some license texts with their own CRLF endings and writes each crate's
-          # "Used by" list in a different order on each platform, so compare the non-blank lines with
-          # their endings stripped: content that is actually stale still shows up.
+          # cargo-about writes each crate's "Used by" list in a different order on each platform, and
+          # copies some license texts with their own CRLF endings, so compare the non-blank lines with
+          # their endings stripped and sorted in byte order. Content that is actually stale still shows
+          # up; ordering, endings and the locale's collation do not.
+          norm() { tr -d '\r' < "$1" | sed '/^[[:space:]]*$/d' | LC_ALL=C sort; }
           cargo about generate --workspace --locked about.hbs -o "$RUNNER_TEMP/licenses.md"
-          diff <(tr -d '\r' < "$RUNNER_TEMP/licenses.md" | sed '/^[[:space:]]*$/d' | sort) \
-               <(tr -d '\r' < THIRD-PARTY-LICENSES.md | sed '/^[[:space:]]*$/d' | sort)
+          diff <(norm "$RUNNER_TEMP/licenses.md") <(norm THIRD-PARTY-LICENSES.md)
 
       - name: Validate desktop entry and AppStream metadata
         run: |

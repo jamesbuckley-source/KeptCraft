@@ -98,6 +98,8 @@ pub fn render(doc: &Doc, base: &RgbaImage, o: &RenderOpts) -> Result<Rendered> {
 struct BandStep {
     label: String,
     color: Color32,
+    /// The badge's radius, roomier for a longer label.
+    badge_r: f32,
     /// The text as shown (bullets included), and where each wrapped line starts in it.
     lines: Vec<(String, usize)>,
     spans: Vec<crate::model::TextSpan>,
@@ -120,7 +122,6 @@ struct BandLayout {
     pad: f32,
     line_step: f32,
     indent: f32,
-    badge_r: f32,
     /// The band's title line, and the height it takes above the comments.
     header: Option<String>,
     header_step: f32,
@@ -203,7 +204,7 @@ fn counter_marks(doc: &Doc) -> Vec<(u32, Color32, String)> {
     doc.items
         .iter()
         .filter_map(|item| match &item.shape {
-            Shape::Counter { n, style, .. } => Some((*n, item.color, style.label_for(*n))),
+            Shape::Counter { n, .. } => Some((*n, item.color, item.shape.counter_text()?)),
             _ => None,
         })
         .collect()
@@ -220,22 +221,33 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
     let pad = commentary.padding.max(0.0) * s;
     let line_step = size * 1.55;
     let badge_r = size * 0.62;
-    let indent = badge_r * 2.0 + size * 0.45;
+    // A badge grows a little for a label of the user's own, and the comments clear the widest one.
+    let badge_text = badge_r * 1.15;
+    let radius = |label: &str| (fonts::measure(label, badge_text).x * 0.5 + size * 0.22).clamp(badge_r, badge_r * 1.45);
+    let radii: Vec<f32> = filled
+        .iter()
+        .map(|entry| {
+            let label = marks.iter().find(|(n, ..)| *n == entry.n);
+            radius(&label.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone()))
+        })
+        .collect();
+    let indent = radii.iter().copied().fold(badge_r, f32::max) * 2.0 + size * 0.45;
     let header = commentary.header.as_ref().map(|h| h.trim().to_owned()).filter(|h| !h.is_empty());
     let header_step = if header.is_some() { size * 1.9 } else { 0.0 };
     let steps = |avail: f32| -> Vec<BandStep> {
         filled
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(at, entry)| {
                 let mark = marks.iter().find(|(n, ..)| *n == entry.n);
                 let color = match mark {
                     Some((_, color, _)) if commentary.match_counter => *color,
                     _ => commentary.badge,
                 };
-                let counter_label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
-                let label = entry.badge(&counter_label);
+                let label = mark.map_or_else(|| entry.n.to_string(), |(_, _, label)| label.clone());
                 let (text, spans) = commentary_text(entry);
-                BandStep { label, color, lines: fonts::wrap_lines_from(&text, size, avail), spans }
+                let badge_r = radii.get(at).copied().unwrap_or(badge_r);
+                BandStep { label, color, badge_r, lines: fonts::wrap_lines_from(&text, size, avail), spans }
             })
             .collect()
     };
@@ -280,7 +292,6 @@ fn commentary_layout(doc: &Doc, commentary: &Commentary, image: Vec2, s: f32) ->
         pad,
         line_step,
         indent,
-        badge_r,
         header,
         header_step,
         gap,
@@ -333,11 +344,17 @@ fn with_commentary(src: Pixmap, layout: &BandLayout, commentary: &Commentary) ->
         if i > 0 || layout.header.is_some() {
             top += gap;
         }
-        let badge_at = pos2(x + layout.badge_r, top + layout.size * 0.6);
-        if let Some(path) = PathBuilder::from_circle(badge_at.x, badge_at.y, layout.badge_r) {
+        let badge_at = pos2(x + step.badge_r, top + layout.size * 0.6);
+        if let Some(path) = PathBuilder::from_circle(badge_at.x, badge_at.y, step.badge_r) {
             out.fill_path(&path, &paint(step.color), FillRule::Winding, Transform::identity(), None);
         }
-        let badge_text = layout.badge_r * 1.15;
+        // A label too long even for a grown badge shrinks to stay inside it.
+        let mut badge_text = step.badge_r * 1.15;
+        let room = step.badge_r * 1.5;
+        let wide = fonts::measure(&step.label, badge_text).x;
+        if wide > room {
+            badge_text = (badge_text * room / wide).max(4.0);
+        }
         let m = fonts::measure(&step.label, badge_text);
         let label_at = badge_at - m * 0.5;
         if let Some(path) = fonts::text_path(&step.label, badge_text, label_at) {
@@ -665,7 +682,7 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
             }
         }
         Shape::Text { pos, text, size, style, wrap } => draw_text(pm, *pos, TextSpec { text, size: *size, style: *style, wrap: *wrap }, item.color, ts),
-        Shape::Counter { center, n, style } => {
+        Shape::Counter { center, n, style, label } => {
             let r = style.size.max(8.0) / 2.0;
             if style.shadow_on && style.shadow > 0.0 {
                 draw_counter_shadow(pm, *center, r, style, ts);
@@ -679,10 +696,15 @@ fn draw_item(pm: &mut Pixmap, item: &Item, ts: Transform, s: f32, region: Rect) 
             {
                 pm.stroke_path(&path, &paint(ring), &stroke(style.outline_width), ts, None);
             }
-            let label = style.label_for(*n);
-            // The label fills what the padding leaves inside the circle.
-            let size = (r * (1.0 - style.padding.clamp(0.0, 0.6))) * 1.7;
-            let m = fonts::measure(&label, size);
+            let label = label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| style.label_for(*n));
+            // The label fills what the padding leaves inside the circle, shrinking to fit a long one.
+            let mut size = (r * (1.0 - style.padding.clamp(0.0, 0.6))) * 1.7;
+            let room = r * 1.7;
+            let mut m = fonts::measure(&label, size);
+            if m.x > room {
+                size = (size * room / m.x).max(5.0);
+                m = fonts::measure(&label, size);
+            }
             draw_text(pm, *center - m * 0.5, TextSpec { text: &label, size, style: TextStyle::Plain, wrap: None }, contrast_on(item.color), ts);
         }
         Shape::Redact { rect, mode, seed } => {
@@ -1021,7 +1043,11 @@ mod tests {
         doc.background = Some(Background { auto_balance: true, ..Default::default() });
         let alone = render(&doc, &doc.base, &RenderOpts::default()).unwrap().region;
         assert_eq!(alone, Rect::from_min_max(pos2(50.0, 0.0), pos2(150.0, 100.0)));
-        doc.items.push(Item { shape: Shape::Counter { center: pos2(15.0, 50.0), n: 1, style: Default::default() }, color: Color32::RED, width: 4.0 });
+        doc.items.push(Item {
+            shape: Shape::Counter { center: pos2(15.0, 50.0), n: 1, style: Default::default(), label: None },
+            color: Color32::RED,
+            width: 4.0,
+        });
         let with_item = render(&doc, &doc.base, &RenderOpts::default()).unwrap().region;
         assert!(with_item.contains(pos2(3.0, 50.0)), "counter stays visible: {with_item:?}");
     }
@@ -1205,7 +1231,7 @@ mod tests {
         let mut doc = Doc::new(RgbaImage::from_pixel(80, 20, image::Rgba([0, 0, 0, 255])));
         let blue = Color32::from_rgb(0, 160, 255);
         doc.items.push(Item {
-            shape: Shape::Counter { center: pos2(70.0, 10.0), n: 1, style: CounterStyle { size: 8.0, ..Default::default() } },
+            shape: Shape::Counter { center: pos2(70.0, 10.0), n: 1, style: CounterStyle { size: 8.0, ..Default::default() }, label: None },
             color: blue,
             width: 4.0,
         });
@@ -1243,10 +1269,36 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_counter_shows_the_same_label_in_the_band() {
+        let mut doc = Doc::new(RgbaImage::from_pixel(50, 50, image::Rgba([255, 255, 255, 255])));
+        doc.items.push(Item {
+            shape: Shape::Counter { center: pos2(10.0, 10.0), n: 1, style: CounterStyle::default(), label: None },
+            color: Color32::RED,
+            width: 4.0,
+        });
+        doc.commentary = Some(Commentary { entries: vec![crate::model::CommentEntry::new(1, "step")], ..Default::default() });
+        let band_label = |doc: &Doc| commentary_layout(doc, doc.commentary.as_ref().unwrap(), vec2(50.0, 50.0), 1.0).unwrap().steps[0].label.clone();
+
+        assert_eq!(band_label(&doc), "1", "unlabelled counters keep their numbering");
+        let renamed = |doc: &mut Doc| {
+            doc.set_counter_label(1, Some("Note".into()));
+            (doc.items[0].shape.counter_text(), band_label(doc))
+        };
+        let (on_image, in_band) = renamed(&mut doc);
+        assert_eq!(on_image.as_deref(), Some("Note"), "the counter itself takes the new label");
+        assert_eq!(in_band, "Note", "and the band badge matches it");
+
+        // A blank label goes back to the numbering.
+        doc.set_counter_label(1, Some("   ".into()));
+        assert_eq!(doc.items[0].shape.counter_text().as_deref(), Some("1"));
+        assert_eq!(band_label(&doc), "1");
+    }
+
+    #[test]
     fn the_counter_shadow_follows_its_switch_direction_and_blur() {
         let flat = |style: CounterStyle| {
             let mut doc = Doc::new(RgbaImage::from_pixel(60, 60, image::Rgba([255, 255, 255, 255])));
-            doc.items.push(Item { shape: Shape::Counter { center: pos2(30.0, 30.0), n: 1, style }, color: Color32::WHITE, width: 4.0 });
+            doc.items.push(Item { shape: Shape::Counter { center: pos2(30.0, 30.0), n: 1, style, label: None }, color: Color32::WHITE, width: 4.0 });
             flatten(&doc).unwrap()
         };
         let style = |angle: f32, blur: f32| CounterStyle {

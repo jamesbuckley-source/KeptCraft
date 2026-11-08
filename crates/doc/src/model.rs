@@ -148,14 +148,24 @@ pub fn letters(n: u32) -> String {
     out
 }
 
+impl Shape {
+    /// The text a counter shows: the user's own label, else its number or letter.
+    pub fn counter_text(&self) -> Option<String> {
+        match self {
+            Shape::Counter { n, style, label, .. } => {
+                let own = label.as_deref().map(str::trim).filter(|l| !l.is_empty());
+                Some(own.map_or_else(|| style.label_for(*n), str::to_owned))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// One numbered step's comment, shown beside the image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommentEntry {
     pub n: u32,
     pub text: String,
-    /// A badge label of the user's own; `None` shows the counter's number or letter.
-    #[serde(default)]
-    pub label: Option<String>,
     /// Stretches of `text` drawn bold or italic.
     #[serde(default)]
     pub spans: Vec<TextSpan>,
@@ -166,12 +176,7 @@ pub struct CommentEntry {
 
 impl CommentEntry {
     pub fn new(n: u32, text: impl Into<String>) -> Self {
-        Self { n, text: text.into(), label: None, spans: Vec::new(), bullet: false }
-    }
-
-    /// What the badge shows: the user's label, else the counter's numbering.
-    pub fn badge(&self, counter_label: &str) -> String {
-        self.label.clone().unwrap_or_else(|| counter_label.to_owned())
+        Self { n, text: text.into(), spans: Vec::new(), bullet: false }
     }
 
     /// The style covering character `at`, if any.
@@ -383,6 +388,9 @@ pub enum Shape {
         n: u32,
         #[serde(default)]
         style: CounterStyle,
+        /// A label of the user's own; `None` shows the numbering from `style`.
+        #[serde(default)]
+        label: Option<String>,
     },
     Redact {
         rect: Rect,
@@ -924,6 +932,18 @@ impl Doc {
         self.items.iter().filter_map(|i| if let Shape::Counter { n, .. } = i.shape { Some(n) } else { None }).max().unwrap_or(0) + 1
     }
 
+    /// Give the counter numbered `n` a label of its own; `None` puts its numbering back.
+    pub fn set_counter_label(&mut self, n: u32, label: Option<String>) {
+        let label = label.map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
+        for item in &mut self.items {
+            if let Shape::Counter { n: c, label: slot, .. } = &mut item.shape
+                && *c == n
+            {
+                *slot = label.clone();
+            }
+        }
+    }
+
     /// Rotate or flip the base image and every annotation with it.
     pub fn reorient(&mut self, op: Orient) {
         let (w, h) = (self.base.width() as f32, self.base.height() as f32);
@@ -1183,7 +1203,11 @@ mod tests {
     fn counters_continue_numbering() {
         let mut doc = sample_doc();
         assert_eq!(doc.next_counter(), 1);
-        doc.items.push(Item { shape: Shape::Counter { center: Pos2::ZERO, n: 4, style: CounterStyle::default() }, color: Color32::RED, width: 4.0 });
+        doc.items.push(Item {
+            shape: Shape::Counter { center: Pos2::ZERO, n: 4, style: CounterStyle::default(), label: None },
+            color: Color32::RED,
+            width: 4.0,
+        });
         assert_eq!(doc.next_counter(), 5);
     }
 }

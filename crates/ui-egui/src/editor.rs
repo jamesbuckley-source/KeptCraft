@@ -231,6 +231,8 @@ struct Editor {
     comment_selection: Option<(u32, usize, usize)>,
     /// A step badge being renamed in place.
     label_edit: Option<(u32, String)>,
+    /// A label field that was just opened and still needs the keyboard.
+    label_focus: bool,
     export_percent: u32,
     view: View,
     tex: Option<TextureHandle>,
@@ -323,6 +325,7 @@ pub fn run(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_tar
         comment_focus: None,
         comment_selection: None,
         label_edit: None,
+        label_focus: false,
         export_percent: 100,
         view: View::default(),
         tex: None,
@@ -1520,8 +1523,9 @@ impl Editor {
         let mut remove_gradient = None;
         let mut edit_gradient = None;
         let mut chosen: Option<BgFill> = None;
-        egui::Grid::new("gradients").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
-            let mut tiles = 0;
+        // Wrapped rather than gridded, so the samples reflow when the panel is widened.
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             for (i, g) in GRADIENTS.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
                 paint_stops(ui.painter(), r, g.angle, |t| sampled(g.stops, t));
@@ -1530,10 +1534,6 @@ impl Editor {
                 }
                 if resp.on_hover_text(g.name).clicked() {
                     chosen = Some(BgFill::Gradient(i));
-                }
-                tiles += 1;
-                if tiles % 4 == 0 {
-                    ui.end_row();
                 }
             }
             // The user's own gradients follow the built-in ones, each with an x to delete it.
@@ -1556,10 +1556,6 @@ impl Editor {
                 } else if resp.clicked() {
                     chosen = Some(BgFill::Custom(Box::new(g.clone())));
                 }
-                tiles += 1;
-                if tiles % 4 == 0 {
-                    ui.end_row();
-                }
             }
             // Build a gradient of your own: the same size as the samples beside it.
             let (r, plus) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
@@ -1570,10 +1566,6 @@ impl Editor {
                     angle: 135.0,
                     stops: vec![GradientStop { at: 0.0, color: [255, 95, 109, 255] }, GradientStop { at: 1.0, color: [255, 195, 113, 255] }],
                 });
-            }
-            tiles += 1;
-            if tiles % 4 == 0 {
-                ui.end_row();
             }
         });
         if let Some(i) = remove_gradient {
@@ -2001,7 +1993,7 @@ impl Editor {
             .items
             .iter()
             .filter_map(|item| match &item.shape {
-                Shape::Counter { n, style, .. } => Some((*n, style.label_for(*n))),
+                Shape::Counter { n, .. } => item.shape.counter_text().map(|label| (*n, label)),
                 _ => None,
             })
             .collect();
@@ -2073,7 +2065,7 @@ impl Editor {
             }
         });
         ui.horizontal(|ui| {
-            changed |= ui.checkbox(&mut c.match_counter, "Match step").on_hover_text("Ring each step in its counter's colour").changed();
+            changed |= ui.checkbox(&mut c.match_counter, "Match counter formatting").on_hover_text("Ring each comment in its counter's colour").changed();
         });
         if !c.match_counter {
             ui.horizontal(|ui| {
@@ -2124,23 +2116,33 @@ impl Editor {
             ui.horizontal(|ui| {
                 if label_edit.as_ref().is_some_and(|(edit, _)| edit == n) {
                     if let Some((_, text)) = &mut label_edit {
-                        let resp = ui.add(egui::TextEdit::singleline(text).desired_width(56.0));
+                        let hint = if text.is_empty() { "label" } else { "" };
+                        let resp = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(56.0));
+                        // A fresh field takes the keyboard with its text selected, so typing replaces the old label.
+                        if std::mem::take(&mut self.label_focus) {
+                            resp.request_focus();
+                            if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
+                                let end = egui::text::CCursor::new(text.chars().count());
+                                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), end);
+                                state.cursor.set_char_range(Some(all));
+                                egui::TextEdit::store_state(ui.ctx(), resp.id, state);
+                            }
+                        }
                         let entered = ui.input(|i| i.key_pressed(Key::Enter));
                         if entered || resp.lost_focus() {
                             let cleaned = text.trim().to_owned();
-                            if let Some(entry) = c.entries.get_mut(idx) {
-                                entry.label = (!cleaned.is_empty()).then_some(cleaned);
-                            }
+                            // The badge and the counter on the image are the same label.
+                            self.doc.set_counter_label(*n, (!cleaned.is_empty()).then_some(cleaned));
                             label_done = true;
                             changed = true;
                         }
                     }
                 } else {
-                    let label = c.entries[idx].badge(counter_label);
-                    let button = egui::Button::new(RichText::new(label).strong()).min_size(vec2(26.0, 0.0));
+                    let button = egui::Button::new(RichText::new(counter_label).strong()).min_size(vec2(26.0, 0.0));
                     let resp = ui.add(button).on_hover_text("Click to adjust the step, double-click to rename it");
                     if resp.double_clicked() {
-                        label_edit = Some((*n, c.entries[idx].badge(counter_label)));
+                        label_edit = Some((*n, counter_label.clone()));
+                        self.label_focus = true;
                     } else if resp.clicked() {
                         picked = Some(*n);
                     }
@@ -2391,7 +2393,7 @@ impl Editor {
                         None => {
                             self.checkpoint();
                             let n = self.doc.next_counter();
-                            let item = self.new_item(Shape::Counter { center: b, n, style: self.counter_style.clone() });
+                            let item = self.new_item(Shape::Counter { center: b, n, style: self.counter_style.clone(), label: None });
                             self.doc.items.push(item);
                             self.selected = Some(self.doc.items.len() - 1);
                             self.touch();
@@ -2740,9 +2742,9 @@ fn section(ui: &mut egui::Ui, title: &str) {
 
 /// A small dial for a shadow direction: click or drag inside it to point the shadow.
 fn direction_dial(ui: &mut egui::Ui, angle: &mut f32) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click_and_drag());
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click_and_drag());
     let center = rect.center();
-    let r = 10.0;
+    let r = 11.0;
     let mut changed = false;
     if let Some(p) = resp.interact_pointer_pos() {
         let v = p - center;
@@ -2752,13 +2754,14 @@ fn direction_dial(ui: &mut egui::Ui, angle: &mut f32) -> bool {
         }
     }
     let painter = ui.painter().clone();
-    painter.circle_stroke(center, r, Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color));
+    // A pale grey disc behind the arrow keeps the direction readable on the dark panel.
+    painter.circle_filled(center, r, Color32::from_gray(198));
+    painter.circle_stroke(center, r, Stroke::new(1.0, Color32::from_gray(128)));
+    let ink = Color32::from_gray(32);
     let a = angle.to_radians();
-    painter.line_segment([center, center + Vec2::angled(a) * r], Stroke::new(2.0, theme::ACCENT));
-    // The head sits near the rim, on a pale disc so the middle of the dial stays readable.
-    let head = center + Vec2::angled(a) * r * 0.8;
-    painter.circle_filled(head, 4.5, Color32::from_white_alpha(46));
-    painter.circle_filled(head, 2.5, theme::ACCENT);
+    let tip = center + Vec2::angled(a) * (r - 2.5);
+    painter.line_segment([center, tip], Stroke::new(2.0, ink));
+    painter.circle_filled(tip, 2.6, ink);
     resp.on_hover_text("Shadow direction").changed() || changed
 }
 

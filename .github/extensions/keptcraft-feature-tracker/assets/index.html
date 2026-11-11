@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KeptCraft feature tracker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#board">Skip to board</a>
+
+    <header class="topbar">
+      <div class="titles">
+        <h1>KeptCraft features</h1>
+        <p class="artifact" id="artifact">Loading board…</p>
+      </div>
+      <div class="toolbar">
+        <button type="button" id="refresh" class="btn ghost">Refresh</button>
+        <button type="button" id="add" class="btn primary" disabled>Add feature</button>
+      </div>
+    </header>
+
+    <section class="summary" aria-label="Progress">
+      <div
+        class="progress"
+        id="progress"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+        aria-label="Features shipped"
+      >
+        <span class="progress-fill" id="progress-fill"></span>
+      </div>
+      <p class="progress-label" id="progress-label">No features yet</p>
+      <ul class="counts" id="counts" aria-label="Features by status"></ul>
+    </section>
+
+    <section class="filters" aria-label="Filters">
+      <label class="filter">
+        <span>Search</span>
+        <input id="search" type="search" placeholder="Title, summary, area or id" autocomplete="off" />
+      </label>
+      <label class="filter">
+        <span>Status</span>
+        <select id="status-filter">
+          <option value="">All statuses</option>
+        </select>
+      </label>
+      <label class="filter">
+        <span>Area</span>
+        <select id="area">
+          <option value="">All areas</option>
+        </select>
+      </label>
+      <label class="filter checkbox">
+        <input id="show-empty" type="checkbox" checked />
+        <span>Show empty columns</span>
+      </label>
+    </section>
+
+    <p class="board-meta" id="board-meta"></p>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <main class="board" id="board" aria-label="Feature board" tabindex="-1"></main>
+
+    <dialog id="editor" aria-labelledby="editor-title">
+      <form id="editor-form" novalidate>
+        <h2 id="editor-title">Add feature</h2>
+        <p class="hint">
+          Saved to <code>docs/features.json</code>, so the board is versioned with the repository.
+        </p>
+
+        <div class="field">
+          <label for="field-title">Title</label>
+          <input id="field-title" name="title" required maxlength="200" autocomplete="off" />
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="field-area">Area</label>
+            <input
+              id="field-area"
+              name="area"
+              list="area-options"
+              maxlength="60"
+              autocomplete="off"
+              placeholder="Capture, Search, Settings…"
+            />
+            <datalist id="area-options"></datalist>
+          </div>
+          <div class="field">
+            <label for="field-status">Status</label>
+            <select id="field-status" name="status"></select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="field-summary">Summary</label>
+          <textarea id="field-summary" name="summary" rows="3" maxlength="2000"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="field-image">Image <span class="optional">optional · PNG, JPEG, GIF or WebP · max 2 MB</span></label>
+          <input id="field-image" name="image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
+          <p class="hint">Choose a file or paste an image while this editor is open.</p>
+          <div class="image-preview" id="image-preview" hidden>
+            <img id="image-preview-img" alt="Feature image preview" />
+            <button type="button" id="remove-image" class="btn tiny">Remove image</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="field-owner">Owner <span class="optional">optional</span></label>
+          <input id="field-owner" name="owner" maxlength="80" autocomplete="off" />
+        </div>
+
+        <div class="field">
+          <label for="field-references">References <span class="optional">one per line</span></label>
+          <textarea
+            id="field-references"
+            name="references"
+            rows="3"
+            placeholder="src-tauri/src/clipboard.rs"
+          ></textarea>
+        </div>
+
+        <p class="form-error" id="form-error" role="alert"></p>
+
+        <div class="dialog-actions">
+          <button type="button" id="cancel" class="btn ghost">Cancel</button>
+          <button type="submit" id="save" class="btn primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

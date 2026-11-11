@@ -17,11 +17,13 @@ use egui::{
 use egui_phosphor::regular as icon;
 use image::RgbaImage;
 
-use keptcraft_engine::config::{ExportFormat, LEGACY_PRESET_EXT, PRESET_EXT, Preset, Settings, State, default_palette};
+use keptcraft_engine::config::{
+    EditorLayout, ExportFormat, LEGACY_PRESET_EXT, PRESET_EXT, Preset, Settings, State, StripDock, StripPlacement, default_palette,
+};
 use keptcraft_engine::doc::fonts;
 use keptcraft_engine::doc::model::{
     Anchor, ArrowStyle, Aspect, Background, BgFill, CommentEntry, Commentary, CommentarySide, CounterLabel, CounterStyle, Doc, GRADIENTS, GradientStop, Item,
-    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextSpan, TextStyle, Watermark, constrain_aspect, is_project_path,
+    Orient, OwnedGradient, PROJECT_EXT, RedactMode, Shape, TextSpan, TextStyle, Watermark, associated_project_path, constrain_aspect, is_project_path,
 };
 use keptcraft_engine::doc::render::{self, RenderOpts};
 use keptcraft_engine::{capture, history, ocr, share, update};
@@ -68,13 +70,17 @@ const TILE_SHAPE: f32 = 0.62;
 const TILE_ROUNDING: u8 = 10;
 /// Width a thumbnail is decoded at, which covers a tile on a wide window.
 const THUMB_WIDTH: u32 = 420;
-/// Widest a tile gets, so three of them stay a column rather than filling a wide window.
+/// Widest a tile gets: a wider window gets more tiles to a row rather than bigger ones.
 const TILE_MAX: f32 = 320.0;
+/// Narrowest a tile gets, so a squeezed window piles the tiles up instead of shrinking them away.
+const TILE_MIN: f32 = 120.0;
 /// The picture beside a name in the File menu.
 const MENU_THUMB_W: f32 = 36.0;
 const MENU_THUMB_H: f32 = 23.0;
-/// Rows of Kept captures the start screen shows, and how many clips that is.
-const KEPT_ROWS: usize = 7;
+/// Edits the recent list remembers, which is as many as the start screen can be asked to show.
+const RECENT_KEPT: usize = 30;
+/// Elbow room in the File menu: an old file is one dashboard click away, a thirty-row menu is not.
+const RECENT_MENU: usize = 12;
 
 /// A start-screen thumbnail: the file it opens, the picture to show (Kept keeps its own small
 /// copy) and what the tooltip says.
@@ -213,10 +219,229 @@ impl View {
     }
 }
 
+/// Tools that live in the marks strip; the drawing strip holds the rest.
+const MARK_TOOLS: [Tool; 5] = [Tool::Redact, Tool::Spotlight, Tool::Counter, Tool::Pen, Tool::Highlighter];
+
+/// One of the movable bars the editor's tools and options live on.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum Strip {
+    Tools,
+    Document,
+    Properties,
+    Marks,
+    Share,
+    Transform,
+}
+
+impl Strip {
+    const ALL: [Strip; 6] = [Strip::Tools, Strip::Document, Strip::Properties, Strip::Marks, Strip::Share, Strip::Transform];
+
+    /// Its place in [`Strip::ALL`], which is the order a merged bar lays its strips out in.
+    fn index(self) -> usize {
+        match self {
+            Strip::Tools => 0,
+            Strip::Document => 1,
+            Strip::Properties => 2,
+            Strip::Marks => 3,
+            Strip::Share => 4,
+            Strip::Transform => 5,
+        }
+    }
+
+    /// The stable name its panel and window ids are built from.
+    fn name(self) -> &'static str {
+        match self {
+            Strip::Tools => "tools",
+            Strip::Document => "document",
+            Strip::Properties => "properties",
+            Strip::Marks => "marks",
+            Strip::Share => "share",
+            Strip::Transform => "transform",
+        }
+    }
+
+    /// What the View menu calls it.
+    fn label(self) -> &'static str {
+        match self {
+            Strip::Tools => "Drawing tools",
+            Strip::Document => "Crop and background",
+            Strip::Properties => "Tool options",
+            Strip::Marks => "Pixelate, steps and freehand",
+            Strip::Share => "Pin, upload and Copy Text",
+            Strip::Transform => "Rotate and flip",
+        }
+    }
+}
+
+/// Thickness of a docked strip, and how close to an edge a dropped strip lands to dock there.
+const STRIP_SIZE: f32 = 44.0;
+const DOCK_REACH: f32 = 56.0;
+/// The band drawn on an edge a strip would dock to, and the outline of bars about to merge.
+const DROP_LINE: f32 = 3.0;
+
+/// A strip being dragged by its grip.
+#[derive(Clone, Copy)]
+struct StripDrag {
+    /// The strip whose grip was grabbed.
+    strip: Strip,
+    /// Where inside the strip the pointer holds it.
+    grab: Vec2,
+    /// The first grip of a merged bar moves the whole bar instead of tearing one strip off.
+    whole_card: bool,
+}
+
+/// One drawn bar: the strips on it and where it sits. A strip of its own is a bar of one.
+struct Card {
+    /// The first strip on the bar, which draws it and gives it its position.
+    first: Strip,
+    members: Vec<Strip>,
+    placement: StripPlacement,
+}
+
+/// A strip's place in the layout, copied out so the layout can change while it is drawn.
+fn placement_of(layout: &EditorLayout, strip: Strip) -> StripPlacement {
+    match strip {
+        Strip::Tools => layout.tools.clone(),
+        Strip::Document => layout.document.clone(),
+        Strip::Properties => layout.properties.clone(),
+        Strip::Marks => layout.marks.clone(),
+        Strip::Share => layout.share.clone(),
+        Strip::Transform => layout.transform.clone(),
+    }
+}
+
+fn placement_of_mut(layout: &mut EditorLayout, strip: Strip) -> &mut StripPlacement {
+    match strip {
+        Strip::Tools => &mut layout.tools,
+        Strip::Document => &mut layout.document,
+        Strip::Properties => &mut layout.properties,
+        Strip::Marks => &mut layout.marks,
+        Strip::Share => &mut layout.share,
+        Strip::Transform => &mut layout.transform,
+    }
+}
+
+/// The bars to draw, in the order the strips are declared: strips sharing a group and an edge
+/// share one bar, which floats or sits on that edge as a whole.
+fn cards(layout: &EditorLayout) -> Vec<Card> {
+    let mut cards: Vec<Card> = Vec::new();
+    let mut taken = [false; 6];
+    for strip in Strip::ALL {
+        if taken[strip.index()] {
+            continue;
+        }
+        let placement = placement_of(layout, strip);
+        if !placement.visible {
+            continue;
+        }
+        let members: Vec<Strip> = if placement.group == 0 {
+            vec![strip]
+        } else {
+            Strip::ALL
+                .into_iter()
+                .filter(|other| {
+                    let their = placement_of(layout, *other);
+                    their.visible && their.group == placement.group && their.dock == placement.dock
+                })
+                .collect()
+        };
+        for member in &members {
+            taken[member.index()] = true;
+        }
+        cards.push(Card { first: strip, members, placement });
+    }
+    cards
+}
+
+/// The frame a docked bar is drawn in: the panel's own, or a step lighter for the tool options so
+/// they read as a strip of their own against the bars above and below.
+fn bar_frame(ctx: &egui::Context, lighter: bool) -> egui::Frame {
+    let style = ctx.global_style();
+    let frame = egui::Frame::side_top_panel(&style);
+    if lighter { frame.fill(bar_fill(&style.visuals)) } else { frame }
+}
+
+/// One shade off the panel behind it: lighter in a dark theme, a touch darker in a light one.
+fn bar_fill(visuals: &egui::Visuals) -> Color32 {
+    if visuals.dark_mode { Color32::from_gray(38) } else { Color32::from_gray(236) }
+}
+
+/// Turn a floating bar: every strip on it lies the other way, so a column becomes a row.
+fn turn_bar(layout: &mut EditorLayout, members: &[Strip]) {
+    let Some(first) = members.first() else { return };
+    let turned = !placement_of(layout, *first).vertical;
+    for member in members {
+        placement_of_mut(layout, *member).vertical = turned;
+    }
+}
+
+/// The line a bar dropped on the top edge would take: under the window's top bar and under any
+/// rows already docked there, since a new row is added after them.
+fn top_drop_line(layout: &EditorLayout, moving: &[Strip], window: Rect, top_bar: Option<Rect>) -> f32 {
+    let rows = cards(layout)
+        .into_iter()
+        .filter(|card| card.placement.dock == Some(StripDock::Top) && !card.members.iter().any(|member| moving.contains(member)))
+        .count();
+    (top_edge(window, top_bar) + rows as f32 * STRIP_SIZE).min(window.bottom() - DROP_LINE)
+}
+
+/// A rule between two groups on a bar. It is sized in pixels rather than stretched to the space
+/// around it, so a bar that has just been turned cannot keep the height or width it had before.
+fn bar_divider(ui: &mut egui::Ui, vertical: bool) {
+    let size = if vertical { vec2(24.0, 1.0) } else { vec2(1.0, 20.0) };
+    let (rule, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect_filled(rule, 0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+}
+
+/// The line a bar docked to the top sits under: the bottom of the window's own top bar, so a bar
+/// dropped just under the menus lands there rather than on the window's edge, which it never
+/// crosses.
+fn top_edge(window: Rect, top_bar: Option<Rect>) -> f32 {
+    top_bar.map_or(window.top(), |bar| bar.bottom()).max(window.top())
+}
+
+/// The edge a strip dropped at `pointer` docks to, or `None` to leave it floating where it landed.
+fn dock_for_pointer(window: Rect, pointer: Pos2, reach: f32, top_bar: Option<Rect>) -> Option<StripDock> {
+    let top = top_edge(window, top_bar);
+    let distances = [
+        (StripDock::Left, pointer.x - window.left()),
+        (StripDock::Right, window.right() - pointer.x),
+        (StripDock::Top, (pointer.y - top).max(0.0)),
+        (StripDock::Bottom, window.bottom() - pointer.y),
+    ];
+    let (dock, distance) = distances.into_iter().min_by(|a, b| a.1.total_cmp(&b.1))?;
+    (distance <= reach).then_some(dock)
+}
+
+/// Land a strip the user let go: an edge within reach docks it there, and anything else leaves it
+/// floating where `pos` already puts it. A docked strip runs across a top or bottom edge and down
+/// a side, so its buttons stay upright.
+fn settle_drop(placement: &mut StripPlacement, window: Rect, pointer: Pos2, top_bar: Option<Rect>) {
+    if let Some(edge) = dock_for_pointer(window, pointer, DOCK_REACH, top_bar) {
+        placement.dock = Some(edge);
+        placement.vertical = matches!(edge, StripDock::Left | StripDock::Right);
+        placement.group = 0;
+    }
+}
+
+/// Put two strips on one bar: they share a group, an edge, a direction and a spot. The dragged
+/// strip takes the target's place, so the bar stays where the user aimed; the target joins the
+/// group too, or the two would draw as bars of their own beside each other.
+fn join_card(dragged: &mut StripPlacement, target: &mut StripPlacement, target_index: usize) {
+    let group = if target.group == 0 { target_index as u8 + 1 } else { target.group };
+    dragged.group = group;
+    dragged.dock = target.dock;
+    dragged.vertical = target.vertical;
+    dragged.pos = target.pos;
+    target.group = group;
+}
+
 struct Editor {
     doc: Doc,
     history_id: Option<String>,
     project_path: Option<PathBuf>,
+    source_image_path: Option<PathBuf>,
+    auto_project_attempted: bool,
     /// Where Save writes when the caller chose a destination (`open-annotate --save-to`).
     save_target: Option<PathBuf>,
     /// Files the File menu offers under Recent Files, most recent last.
@@ -310,6 +535,14 @@ struct Editor {
     update_dismissed: bool,
     /// The installer is running and this window already asked to close.
     closing_for_update: bool,
+    /// Where the tool strips sit: docked to an edge or floating over the canvas.
+    layout: EditorLayout,
+    /// The strip being dragged by its grip, and the point inside it that the pointer holds.
+    strip_drag: Option<StripDrag>,
+    /// Where each strip's bar was last frame, so a drop can land on one.
+    card_rects: [Option<Rect>; 6],
+    /// The top bar's rect last frame, so a strip can be dropped into it beside File and View.
+    top_bar_rect: Option<Rect>,
 }
 
 /// `save_target` is the file Save writes, for a caller that needs a known result path (a clip
@@ -329,18 +562,31 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
     let natural = if home { vec2(1240.0, 860.0) } else { vec2(doc.base.width() as f32, doc.base.height() as f32) / scale + vec2(80.0, 140.0) };
     // Not `clamp`: it panics when a small screen makes the upper bound less than the minimum.
     let size = natural.max(vec2(1300.0, 740.0)).min(screen.size() * 0.88);
-    let project_path = path.as_ref().filter(|p| is_project_path(p)).cloned();
+    let project_path = path.as_ref().and_then(|p| {
+        if is_project_path(p) {
+            Some(p.clone())
+        } else {
+            let project = associated_project_path(p);
+            project.is_file().then_some(project)
+        }
+    });
+    let source_image_path = path.as_ref().filter(|_| project_path.is_none()).cloned();
     // Name the file in the title: several editors can be open, and one of them is a caller's clip.
     let title = if home {
         "KeptCraft".to_owned()
     } else {
-        match path.as_ref().or(project_path.as_ref()).and_then(|p| p.file_name()) {
+        match project_path.as_ref().or(path.as_ref()).and_then(|p| p.file_name()) {
             Some(name) => format!("{} — KeptCraft", name.to_string_lossy()),
             None => "KeptCraft — Annotate".to_owned(),
         }
     };
-    let builder = egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size(vec2(1040.0, 520.0)).with_drag_and_drop(true);
     let settings = Settings::load();
+    let builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(size)
+        .with_min_inner_size(vec2(1040.0, 520.0))
+        .with_drag_and_drop(true)
+        .with_taskbar(settings.show_in_taskbar);
     let color = settings.palette.first().map_or(Color32::from_rgb(255, 59, 48), |c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
     let show_background = doc.background.is_some();
     let state = State::load();
@@ -349,6 +595,7 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
     let show_commentary = doc.commentary.is_some();
     let background_width = state.background_width.unwrap_or(BACKGROUND_WIDTH);
     let background_collapsed = state.background_collapsed.unwrap_or(false);
+    let layout = state.editor_layout;
     let mut recent = state.recent_files;
     if let Some(path) = path.as_ref() {
         remember_recent(&mut recent, path);
@@ -357,6 +604,8 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
         doc,
         history_id,
         project_path,
+        source_image_path,
+        auto_project_attempted: false,
         save_target,
         recent,
         home,
@@ -420,6 +669,10 @@ fn run_with(doc: Doc, history_id: Option<String>, path: Option<PathBuf>, save_ta
         update: update_ui::Updater::new(),
         update_dismissed: false,
         closing_for_update: false,
+        layout,
+        strip_drag: None,
+        card_rects: [None; 6],
+        top_bar_rect: None,
     })
 }
 
@@ -435,10 +688,22 @@ fn truncate(text: &str, max: usize) -> String {
     }
 }
 
-/// The tile size for the room the start screen has: three across, as wide as they can be.
-fn tile_size(ui: &egui::Ui) -> (f32, f32) {
-    let width = ((ui.available_width() - 2.0 * TILE_GAP) / 3.0).floor().clamp(120.0, TILE_MAX);
-    (width, (width * TILE_SHAPE).round())
+/// Tiles to a row for the width the start screen has, and the tile size that fills it: as many
+/// columns as keep a tile at or under its widest, so a wider window shows more rather than bigger.
+fn tile_layout(available: f32) -> (usize, f32, f32) {
+    let columns = (((available + TILE_GAP) / (TILE_MAX + TILE_GAP)).ceil() as usize).max(1);
+    let width = ((available - TILE_GAP * (columns - 1) as f32) / columns as f32).floor().clamp(TILE_MIN, TILE_MAX);
+    (columns, width, (width * TILE_SHAPE).round())
+}
+
+/// The capture history window, beside the File menu: the list the tray's History shortcut opens.
+fn history_button(ui: &mut egui::Ui) {
+    if theme::tool_button(ui, icon::CLOCK_COUNTER_CLOCKWISE, None, false, false)
+        .on_hover_text("Capture history — restore, copy, save, annotate or pin a capture you kept")
+        .clicked()
+    {
+        share::spawn(["open-history"]);
+    }
 }
 
 /// A menu row with a small picture of the file beside its name, or a plain row when the picture
@@ -480,7 +745,7 @@ fn file_label(path: &Path) -> String {
 fn remember_recent(recent: &mut Vec<PathBuf>, path: &Path) {
     recent.retain(|p| p != path);
     recent.push(path.to_path_buf());
-    let excess = recent.len().saturating_sub(10);
+    let excess = recent.len().saturating_sub(RECENT_KEPT);
     recent.drain(..excess);
     let saved = recent.clone();
     State::update(|s| s.recent_files = saved);
@@ -521,6 +786,36 @@ impl Editor {
 
     fn touch(&mut self) {
         self.revision += 1;
+        if self.project_path.is_none()
+            && !self.auto_project_attempted
+            && self.settings.auto_create_projects
+            && !self.doc.items.is_empty()
+            && self.source_image_path.is_some()
+        {
+            self.auto_project_attempted = true;
+            self.create_auto_project();
+        }
+    }
+
+    fn create_auto_project(&mut self) -> bool {
+        let Some(source) = self.source_image_path.as_ref() else { return false };
+        let path = associated_project_path(source);
+        if path.exists() {
+            self.flash(format!("Could not create project: {} already exists", path.display()));
+            return false;
+        }
+        match self.doc.save_project(&path) {
+            Ok(()) => {
+                self.project_path = Some(path.clone());
+                self.saved_revision = self.revision;
+                self.flash(format!("Created project {}", path.display()));
+                true
+            }
+            Err(err) => {
+                self.flash(format!("Could not create project {}: {err}", path.display()));
+                false
+            }
+        }
     }
 
     fn undo(&mut self) {
@@ -584,6 +879,11 @@ impl Editor {
             }
             return;
         }
+        if self.project_path.is_none() && self.settings.auto_create_projects && !self.doc.items.is_empty() && self.source_image_path.is_some() {
+            self.auto_project_attempted = true;
+            self.create_auto_project();
+            return;
+        }
         if let Some(path) = self.project_path.clone() {
             let r = self.doc.save_project(&path).map_err(|e| format!("Could not save {}: {e}", path.display()));
             if self.report(r).is_some() {
@@ -633,7 +933,7 @@ impl Editor {
             ui.add_enabled_ui(has_recent, |ui| {
                 ui.menu_button(format!("{}  Recent Files", icon::CLOCK_COUNTER_CLOCKWISE), |ui| {
                     ui.set_min_width(300.0);
-                    for path in self.recent.clone().into_iter().rev() {
+                    for path in self.recent.clone().into_iter().rev().take(RECENT_MENU) {
                         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
                         let thumb = self.thumb(ui.ctx(), &path);
                         if thumb_button(ui, thumb.as_ref(), name).on_hover_text(path.display().to_string()).clicked() {
@@ -661,6 +961,11 @@ impl Editor {
                 ui.close();
                 self.save_as();
             }
+            if ui.button(format!("{}  Save Project…", icon::FILE_IMAGE)).on_hover_text("Save a .keptcraft project you can reopen and keep editing").clicked()
+            {
+                ui.close();
+                self.save_project_as();
+            }
             ui.separator();
             if ui
                 .button(format!("{}  Export Preset…", icon::EXPORT))
@@ -675,12 +980,400 @@ impl Editor {
                 self.import_preset();
             }
             ui.separator();
+            if ui.button(format!("{}  Settings…", icon::GEAR)).on_hover_text("Open the Settings window").clicked() {
+                ui.close();
+                share::spawn(["open-settings"]);
+            }
+            ui.separator();
             if ui.button(format!("{}  Close", icon::X)).on_hover_text("Close (Ctrl/Cmd+W)").clicked() {
                 ui.close();
                 // The viewport's close request, so unsaved project edits still ask first.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });
+    }
+
+    /// Show or hide the tool strips, and put them back where they started.
+    fn view_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button(format!("{}  View", icon::EYE), |ui| {
+            ui.set_min_width(250.0);
+            let mut changed = false;
+            for strip in Strip::ALL {
+                let mut visible = self.placement(strip).visible;
+                if ui.checkbox(&mut visible, strip.label()).changed() {
+                    self.placement_mut(strip).visible = visible;
+                    changed = true;
+                }
+            }
+            ui.separator();
+            if ui.button("Reset the toolbar layout").clicked() {
+                self.layout = EditorLayout::default();
+                changed = true;
+                ui.close();
+            }
+            if changed {
+                self.save_layout();
+            }
+        });
+    }
+
+    /// Where a strip sits this frame; a copy, so the layout can be changed while it is drawn.
+    fn placement(&self, strip: Strip) -> StripPlacement {
+        placement_of(&self.layout, strip)
+    }
+
+    fn placement_mut(&mut self, strip: Strip) -> &mut StripPlacement {
+        placement_of_mut(&mut self.layout, strip)
+    }
+
+    /// Every strip on the same bar as `strip`; just `strip` when it has a bar of its own.
+    fn card_members(&self, strip: Strip) -> Vec<Strip> {
+        let placement = self.placement(strip);
+        if placement.group == 0 {
+            return vec![strip];
+        }
+        Strip::ALL.into_iter().filter(|other| self.placement(*other).group == placement.group).collect()
+    }
+
+    /// Give every strip in `members` the same place, so a bar moves, docks and merges as one.
+    fn set_card(&mut self, members: &[Strip], placement: &StripPlacement) {
+        for member in members {
+            *self.placement_mut(*member) = placement.clone();
+        }
+    }
+
+    /// Write the strip layout for the next window; it is window chrome, not part of a document.
+    fn save_layout(&self) {
+        let layout = self.layout.clone();
+        State::update(|s| s.editor_layout = layout);
+    }
+
+    /// The strip whose bar covers `pointer`, if any, ignoring the strips already in hand. Only a bar
+    /// running the same way counts, so a horizontal strip joins rows and a vertical one joins columns.
+    fn card_under(layout: &EditorLayout, pointer: Pos2, moving: &[Strip], cards: &[Option<Rect>; 6]) -> Option<Strip> {
+        let vertical = moving.first().is_some_and(|strip| placement_of(layout, *strip).vertical);
+        Strip::ALL.into_iter().find(|other| {
+            if moving.contains(other) {
+                return false;
+            }
+            let target = placement_of(layout, *other);
+            target.visible && target.vertical == vertical && cards[other.index()].is_some_and(|rect| rect.contains(pointer))
+        })
+    }
+
+    /// Where the strips in hand land when they are let go: on the bar under the pointer if one is there,
+    /// otherwise on an edge within reach, otherwise where they float. Reports the bar they joined, and
+    /// that bar's new placement, so the caller can move it into the same group.
+    fn landing(
+        layout: &EditorLayout,
+        moving: &[Strip],
+        window: Rect,
+        pointer: Pos2,
+        cards: &[Option<Rect>; 6],
+        top_bar: Option<Rect>,
+    ) -> (StripPlacement, Option<(Strip, StripPlacement)>) {
+        let Some(first) = moving.first() else { return (StripPlacement::default(), None) };
+        let mut landed = placement_of(layout, *first);
+        let merged = Self::card_under(layout, pointer, moving, cards).map(|target| {
+            let mut bar = placement_of(layout, target);
+            join_card(&mut landed, &mut bar, target.index());
+            (target, bar)
+        });
+        if merged.is_none() {
+            if top_bar.is_some_and(|bar| bar.contains(pointer)) {
+                // Dropped on the window's own bar: it joins File and View, lying along it.
+                landed.dock = Some(StripDock::TopBar);
+                landed.vertical = false;
+                landed.group = 0;
+            } else {
+                settle_drop(&mut landed, window, pointer, top_bar);
+            }
+        }
+        (landed, merged)
+    }
+
+    /// The four tool strips on their edges or floating, with any strip being dragged following the
+    /// pointer until it is dropped.
+    fn toolbar_strips(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        let window = ctx.viewport_rect();
+
+        if let Some(drag) = self.strip_drag {
+            // A merged bar moves as a whole when its first grip is taken; any other grip tears off.
+            let moving = if drag.whole_card { self.card_members(drag.strip) } else { vec![drag.strip] };
+            if let Some(pointer) = ctx.pointer_latest_pos() {
+                let at = pointer - drag.grab;
+                for member in &moving {
+                    let placement = self.placement_mut(*member);
+                    placement.dock = None;
+                    placement.pos = [at.x, at.y];
+                }
+            }
+            if ctx.input(|i| i.pointer.any_released()) {
+                // Dropped: a bar under the pointer takes the strips onto its row, an edge within
+                // reach docks them, and anywhere else leaves them floating where they were let go.
+                if let Some(pointer) = ctx.pointer_latest_pos() {
+                    let (landed, merged) = Self::landing(&self.layout, &moving, window, pointer, &self.card_rects, self.top_bar_rect);
+                    if let Some((target, bar)) = merged {
+                        self.set_card(&[target], &bar);
+                    }
+                    self.set_card(&moving, &landed);
+                }
+                self.strip_drag = None;
+                self.save_layout();
+            }
+        }
+
+        if self.crop.is_some() {
+            return;
+        }
+
+        for card in cards(&self.layout) {
+            let id = egui::Id::new(("strip", card.first.name()));
+            let vertical = card.placement.vertical;
+            // The first grip of a merged floating bar moves the bar; every other grip tears off.
+            let whole_card = card.members.len() > 1 && card.placement.dock.is_none();
+            let members = card.members.clone();
+            // The tool options sit a shade lighter than the bars around them.
+            let lighter = card.members.contains(&Strip::Properties);
+            let rect = match card.placement.dock {
+                Some(StripDock::Top) => {
+                    egui::Panel::top(id)
+                        .exact_size(STRIP_SIZE)
+                        .frame(bar_frame(root.ctx(), lighter))
+                        .show(root, |ui| self.strip_row(ui, &members, vertical, whole_card))
+                        .response
+                        .rect
+                }
+                Some(StripDock::Bottom) => {
+                    egui::Panel::bottom(id)
+                        .exact_size(STRIP_SIZE)
+                        .frame(bar_frame(root.ctx(), lighter))
+                        .show(root, |ui| self.strip_row(ui, &members, vertical, whole_card))
+                        .response
+                        .rect
+                }
+                Some(StripDock::Left) => {
+                    egui::Panel::left(id)
+                        .exact_size(STRIP_SIZE)
+                        .frame(bar_frame(root.ctx(), lighter))
+                        .show(root, |ui| self.strip_row(ui, &members, vertical, whole_card))
+                        .response
+                        .rect
+                }
+                Some(StripDock::Right) => {
+                    egui::Panel::right(id)
+                        .exact_size(STRIP_SIZE)
+                        .frame(bar_frame(root.ctx(), lighter))
+                        .show(root, |ui| self.strip_row(ui, &members, vertical, whole_card))
+                        .response
+                        .rect
+                }
+                // A bar in the window's own top bar is drawn by the toolbar itself.
+                Some(StripDock::TopBar) => continue,
+                None => self.floating_card(&ctx, window, &members, &card.placement, whole_card),
+            };
+            for member in card.members {
+                self.card_rects[member.index()] = Some(rect);
+            }
+        }
+
+        self.strip_drop_hint(&ctx, window);
+    }
+
+    /// One floating bar, holding every strip on that bar. It sits above the canvas and the panels,
+    /// and stays inside the window.
+    fn floating_card(&mut self, ctx: &egui::Context, window: Rect, members: &[Strip], placement: &StripPlacement, whole_card: bool) -> Rect {
+        let lighter = members.contains(&Strip::Properties);
+        let pos = pos2(placement.pos[0].clamp(0.0, (window.width() - 48.0).max(0.0)), placement.pos[1].clamp(0.0, (window.height() - 48.0).max(0.0)));
+        // A fresh area whenever the bar changes shape: an area keeps the size it had last frame, so
+        // a bar that has been turned or had a strip torn off would stay as big as it used to be.
+        let id = egui::Id::new(("strip-card", placement.group, &members, placement.vertical));
+        let shown = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(if lighter { bar_fill(ui.visuals()) } else { ui.visuals().window_fill })
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .corner_radius(10)
+                .inner_margin(egui::Margin::symmetric(6, 5))
+                .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(60) })
+                .show(ui, |ui| self.strip_row(ui, members, placement.vertical, whole_card));
+        });
+        shown.response.rect
+    }
+
+    /// Each strip on a bar: its grip and buttons, with a rule between neighbours.
+    fn strip_row(&mut self, ui: &mut egui::Ui, members: &[Strip], vertical: bool, whole_card: bool) {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        let row = |ui: &mut egui::Ui| {
+            for (i, strip) in members.iter().enumerate() {
+                if i > 0 {
+                    bar_divider(ui, vertical);
+                }
+                self.strip_buttons(ui, *strip, vertical, whole_card && i == 0);
+            }
+        };
+        if vertical {
+            ui.vertical(row);
+        } else {
+            ui.horizontal_centered(row);
+        }
+    }
+
+    /// While a strip is in hand, show where letting go would put it: an outline around the two bars
+    /// that are about to become one, or a band on the edge it would dock to.
+    fn strip_drop_hint(&self, ctx: &egui::Context, window: Rect) {
+        let Some(drag) = self.strip_drag else { return };
+        let Some(pointer) = ctx.pointer_latest_pos() else { return };
+        let moving = if drag.whole_card { self.card_members(drag.strip) } else { vec![drag.strip] };
+        let (landed, merged) = Self::landing(&self.layout, &moving, window, pointer, &self.card_rects, self.top_bar_rect);
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("strip-drop")));
+        if let Some((target, _)) = merged {
+            for strip in std::iter::once(target).chain(moving.iter().copied()) {
+                if let Some(rect) = self.card_rects[strip.index()] {
+                    painter.rect_stroke(rect.expand(1.0), 10, Stroke::new(DROP_LINE, theme::ACCENT), StrokeKind::Outside);
+                }
+            }
+            return;
+        }
+        if landed.dock == Some(StripDock::TopBar)
+            && let Some(bar) = self.top_bar_rect
+        {
+            painter.rect_stroke(bar, 4, Stroke::new(DROP_LINE, theme::ACCENT), StrokeKind::Inside);
+            return;
+        }
+        // The band sits where the bar will: under the window's own top bar, not on the window edge.
+        if let Some(edge) = landed.dock {
+            let band = match edge {
+                StripDock::Left => Rect::from_min_max(window.left_top(), pos2(window.left() + DROP_LINE, window.bottom())),
+                StripDock::Right => Rect::from_min_max(pos2(window.right() - DROP_LINE, window.top()), window.right_bottom()),
+                StripDock::Bottom => Rect::from_min_max(pos2(window.left(), window.bottom() - DROP_LINE), window.right_bottom()),
+                _ => {
+                    let line = top_drop_line(&self.layout, &moving, window, self.top_bar_rect);
+                    Rect::from_min_max(pos2(window.left(), line), pos2(window.right(), line + DROP_LINE))
+                }
+            };
+            painter.rect_filled(band, 0, theme::ACCENT);
+        }
+    }
+
+    fn strip_buttons(&mut self, ui: &mut egui::Ui, strip: Strip, vertical: bool, moves_card: bool) {
+        let ctx = ui.ctx().clone();
+        let origin = ui.cursor().min;
+        let grip = self.strip_grip(ui, vertical, moves_card);
+        // A floating bar can lie either way: a double click turns every strip on it.
+        if grip.double_clicked() && self.placement(strip).dock.is_none() {
+            let members = self.card_members(strip);
+            turn_bar(&mut self.layout, &members);
+            self.save_layout();
+        } else if grip.drag_started()
+            && let Some(pointer) = ctx.pointer_latest_pos()
+        {
+            // Tearing a strip off its bar leaves the rest of the bar where it was.
+            self.strip_drag = Some(StripDrag { strip, grab: pointer - origin, whole_card: moves_card });
+            if !moves_card {
+                self.placement_mut(strip).group = 0;
+            }
+        }
+        let counters = self.doc.items.iter().filter(|it| matches!(it.shape, Shape::Counter { .. })).count();
+        match strip {
+            Strip::Document => {
+                if theme::tool_button(ui, icon::CROP, None, false, false).on_hover_text("Crop (C)").clicked() {
+                    self.enter_crop();
+                }
+                if theme::tool_button(ui, icon::IMAGE_SQUARE, None, self.show_background, false).on_hover_text("Background tool (B)").clicked() {
+                    self.toggle_background();
+                }
+            }
+            Strip::Properties => self.style_controls(ui, vertical),
+            Strip::Tools => {
+                if theme::tool_button(ui, icon::HAND, None, self.hand() && self.crop.is_none(), false)
+                    .on_hover_text("Move the canvas — hold Space, or drag with the middle button")
+                    .clicked()
+                {
+                    self.select_tool(Tool::Pan);
+                }
+                bar_divider(ui, vertical);
+                for (tool, ic, tip, _) in TOOLS.into_iter().filter(|(tool, ..)| !MARK_TOOLS.contains(tool)) {
+                    let current = self.tool == tool && self.crop.is_none();
+                    if theme::tool_button_icon(ui, ic, None, current, false).on_hover_text(tip).clicked() {
+                        self.select_tool(tool);
+                    }
+                }
+            }
+            Strip::Marks => {
+                for (tool, ic, tip, _) in TOOLS.into_iter().filter(|(tool, ..)| MARK_TOOLS.contains(tool)) {
+                    let current = self.tool == tool && self.crop.is_none();
+                    if theme::tool_button_icon(ui, ic, None, current, false).on_hover_text(tip).clicked() {
+                        self.select_tool(tool);
+                    }
+                    if tool == Tool::Counter {
+                        // The comment panel lives with the steps it describes, and needs one to exist.
+                        ui.add_enabled_ui(counters > 0, |ui| {
+                            if theme::tool_button(ui, icon::CHAT_CIRCLE, None, self.show_commentary, false)
+                                .on_hover_text("The steps' comments")
+                                .on_disabled_hover_text("Place a numbered step first")
+                                .clicked()
+                            {
+                                self.toggle_commentary();
+                            }
+                        });
+                    }
+                }
+            }
+            Strip::Share => {
+                if theme::tool_button(ui, icon::TEXT_AA, None, false, false).on_hover_text("Copy Text (OCR)").clicked() {
+                    self.copy_text(&ctx);
+                }
+                // Uploading needs somewhere to upload to, so the button waits until Settings has one.
+                if !self.settings.upload.url.trim().is_empty()
+                    && theme::tool_button(ui, icon::CLOUD_ARROW_UP, None, false, false).on_hover_text("Upload").clicked()
+                {
+                    self.upload(&ctx);
+                }
+                if theme::tool_button(ui, icon::PUSH_PIN, None, false, false).on_hover_text("Pin to Screen").clicked() {
+                    self.pin();
+                }
+            }
+            Strip::Transform => {
+                for (op, ic, tip) in [
+                    (Orient::RotateCcw, icon::ARROW_COUNTER_CLOCKWISE, "Rotate Left"),
+                    (Orient::RotateCw, icon::ARROW_CLOCKWISE, "Rotate Right"),
+                    (Orient::FlipH, icon::FLIP_HORIZONTAL, "Flip Horizontal"),
+                    (Orient::FlipV, icon::FLIP_VERTICAL, "Flip Vertical"),
+                ] {
+                    if theme::tool_button(ui, ic, None, false, false).on_hover_text(tip).clicked() {
+                        self.reorient(op);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The handle a strip is torn off, or its whole bar moved, by. Six dots run along the bar and
+    /// two across it, evenly spaced, so the handle reads as a row of dots whichever way it lies.
+    fn strip_grip(&mut self, ui: &mut egui::Ui, vertical: bool, moves_card: bool) -> egui::Response {
+        let (cols, rows) = if vertical { (6, 2) } else { (2, 6) };
+        let pitch = 3.0;
+        let size = vec2(cols as f32 * pitch + 8.0, rows as f32 * pitch + 8.0);
+        let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        if resp.hovered() || resp.dragged() {
+            ui.painter().rect_filled(rect, 5, ui.visuals().widgets.hovered.weak_bg_fill);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        let colour = if resp.hovered() { ui.visuals().text_color() } else { ui.visuals().weak_text_color() };
+        let spread = vec2((cols as f32 - 1.0) * pitch, (rows as f32 - 1.0) * pitch);
+        let origin = rect.center() - spread / 2.0;
+        for column in 0..cols {
+            for row in 0..rows {
+                ui.painter().circle_filled(origin + vec2(column as f32 * pitch, row as f32 * pitch), 1.1, colour);
+            }
+        }
+        let tip = if moves_card {
+            "Drag to move this bar; double-click to turn it"
+        } else {
+            "Drag to move this strip; drop it on an edge to dock it, or double-click a floating one to turn it"
+        };
+        resp.on_hover_text(tip)
     }
 
     /// Kept's newest image clips, when the integration is on: one click opens a clip for annotation.
@@ -718,7 +1411,13 @@ impl Editor {
     fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         match Doc::open(&path) {
             Ok(doc) => {
-                let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_string());
+                let display_path = if is_project_path(&path) {
+                    path.clone()
+                } else {
+                    let project = associated_project_path(&path);
+                    if project.is_file() { project } else { path.clone() }
+                };
+                let name = display_path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_string());
                 self.load_document(doc, Some(path));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — KeptCraft")));
             }
@@ -734,7 +1433,16 @@ impl Editor {
         self.doc = doc;
         self.home = false;
         self.show_background = self.doc.background.is_some();
-        self.project_path = path.filter(|p| is_project_path(p));
+        self.project_path = path.as_ref().and_then(|p| {
+            if is_project_path(p) {
+                Some(p.clone())
+            } else {
+                let project = associated_project_path(p);
+                project.is_file().then_some(project)
+            }
+        });
+        self.source_image_path = path.filter(|_| self.project_path.is_none());
+        self.auto_project_attempted = false;
         self.history_id = None;
         self.save_target = None;
         self.undo.clear();
@@ -1130,85 +1838,23 @@ impl Editor {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
+        self.top_bar_rect = Some(ui.max_rect());
         ui.horizontal_centered(|ui| {
             self.file_menu(ui);
+            self.view_menu(ui);
             ui.separator();
-            if theme::tool_button(ui, icon::CROP, None, self.crop.is_some(), false).on_hover_text("Crop (C)").clicked() {
-                if self.crop.is_some() { self.apply_crop() } else { self.enter_crop() }
-            }
-            if theme::tool_button(ui, icon::IMAGE_SQUARE, None, self.show_background, false).on_hover_text("Background tool (B)").clicked() {
-                self.toggle_background();
-            }
-            ui.separator();
-            if theme::tool_button(ui, icon::HAND, None, self.hand() && self.crop.is_none(), false)
-                .on_hover_text("Move the canvas — hold Space, or drag with the middle button")
-                .clicked()
-            {
-                self.select_tool(Tool::Pan);
-            }
-            let counters = self.doc.items.iter().filter(|it| matches!(it.shape, Shape::Counter { .. })).count();
-            for (tool, ic, tip, _) in TOOLS {
-                // A rule before the pixelate/blur pair and around the counter keeps the groups apart.
-                if matches!(tool, Tool::Redact | Tool::Counter) {
-                    ui.separator();
-                }
-                if theme::tool_button_icon(ui, ic, None, self.tool == tool && self.crop.is_none(), false).on_hover_text(tip).clicked() {
-                    self.select_tool(tool);
-                }
-                if tool == Tool::Counter {
-                    // The comment panel lives with the steps it describes, and needs one to exist.
-                    ui.add_enabled_ui(counters > 0, |ui| {
-                        if theme::tool_button(ui, icon::CHAT_CIRCLE, None, self.show_commentary, false)
-                            .on_hover_text("The steps' comments")
-                            .on_disabled_hover_text("Place a numbered step first")
-                            .clicked()
-                        {
-                            self.toggle_commentary();
-                        }
-                    });
-                    ui.separator();
+            history_button(ui);
+            // Any bar dropped on this row lives here, beside the menus.
+            for card in cards(&self.layout).into_iter().filter(|card| card.placement.dock == Some(StripDock::TopBar)) {
+                ui.separator();
+                let members = card.members.clone();
+                let rect = ui.scope(|ui| self.strip_row(ui, &members, false, false)).response.rect;
+                for member in card.members {
+                    self.card_rects[member.index()] = Some(rect);
                 }
             }
-            // A little air after the last tool, so it does not sit against the rule.
-            ui.add_space(6.0);
+            // The tools themselves live in their own strips; the bar keeps the document actions.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button(RichText::new(icon::DOTS_THREE).size(18.0), |ui| {
-                    if ui.button(format!("{}  Save As…", icon::DOWNLOAD_SIMPLE)).clicked() {
-                        self.save_as();
-                    }
-                    if ui.button(format!("{}  Save Project…", icon::FILE_IMAGE)).clicked() {
-                        self.save_project_as();
-                    }
-                    ui.separator();
-                    if ui.button(format!("{}  Pin to Screen", icon::PUSH_PIN)).clicked() {
-                        self.pin();
-                    }
-                    if ui.button(format!("{}  Upload", icon::CLOUD_ARROW_UP)).clicked() {
-                        self.upload(&ctx);
-                    }
-                    if ui.button(format!("{}  Copy Text (OCR)", icon::TEXT_AA)).clicked() {
-                        self.copy_text(&ctx);
-                    }
-                    ui.separator();
-                    for (op, ic, label) in [
-                        (Orient::RotateCcw, icon::ARROW_COUNTER_CLOCKWISE, "Rotate Left"),
-                        (Orient::RotateCw, icon::ARROW_CLOCKWISE, "Rotate Right"),
-                        (Orient::FlipH, icon::FLIP_HORIZONTAL, "Flip Horizontal"),
-                        (Orient::FlipV, icon::FLIP_VERTICAL, "Flip Vertical"),
-                    ] {
-                        if ui.button(format!("{ic}  {label}")).clicked() {
-                            self.reorient(op);
-                        }
-                    }
-                    ui.separator();
-                    if ui.button(format!("{}  Paste Image", icon::CLIPBOARD)).clicked() {
-                        let r = share::clipboard_image();
-                        if let Some(img) = self.report(r) {
-                            self.add_image_item(img);
-                        }
-                    }
-                });
                 let save = egui::Button::new(RichText::new(format!("{}  Save", icon::FLOPPY_DISK)).color(Color32::WHITE)).fill(theme::ACCENT);
                 let save_hint = match &self.save_target {
                     Some(target) => format!("Save to {}", target.display()),
@@ -1230,47 +1876,40 @@ impl Editor {
                         self.undo();
                     }
                 });
-                // The zoom cluster is the last thing added to the row, so it only draws when the
-                // tools and the actions above have left room for it.
-                if ui.available_width() > 132.0 {
-                    ui.separator();
-                    self.zoom_control(ui);
-                    // A rule on the tools side too, so the cluster reads as its own group.
-                    ui.separator();
-                }
             });
         });
     }
 
-    /// Zoom cluster: smaller, a slider you can drag, bigger, and a reset back to the fit.
+    /// Zoom cluster: smaller, a slider you can drag, bigger, and a reset back to the fit. It sits in
+    /// the status bar beside the percentage, so it lays itself out rather than taking a block.
     fn zoom_control(&mut self, ui: &mut egui::Ui) {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if tiny_button(ui, icon::MINUS, "Zoom out") {
-                self.zoom_by(1.0 / 1.25);
-            }
-            let mut zoom = self.zoom;
-            // The slider sits in a strip the same height as the buttons beside it and is centred in
-            // it, so the row reads as one line instead of the track floating between glyphs.
-            ui.spacing_mut().slider_width = 44.0;
-            let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
-            let (strip, _) = ui.allocate_exact_size(vec2(44.0, 18.0), Sense::hover());
-            // A hair up: the − and + glyphs sit on their text baseline, a little above the middle.
-            let strip = strip.translate(vec2(0.0, -3.0));
-            let mut centred = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
-            centred.spacing_mut().slider_width = 44.0;
-            if centred.add(slider).on_hover_text("Zoom").changed() {
-                self.zoom_to(zoom, None);
-            }
-            if tiny_button(ui, icon::PLUS, "Zoom in") {
-                self.zoom_by(1.25);
-            }
-            if tiny_button(ui, icon::ARROWS_CLOCKWISE, "Fit to the window (Ctrl/Cmd+0)") {
-                self.zoom = 1.0;
-                self.zoom_moved = true;
-                self.pan = Vec2::ZERO;
-            }
-        });
+        let spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if tiny_button(ui, icon::MINUS, "Zoom out") {
+            self.zoom_by(1.0 / 1.25);
+        }
+        let mut zoom = self.zoom;
+        // The slider sits in a strip the same height as the buttons beside it and is centred in it,
+        // so the row reads as one line instead of the track floating between glyphs.
+        ui.spacing_mut().slider_width = 44.0;
+        let slider = egui::Slider::new(&mut zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).show_value(false);
+        let (strip, _) = ui.allocate_exact_size(vec2(44.0, 18.0), Sense::hover());
+        // A hair up: the − and + glyphs sit on their text baseline, a little above the middle.
+        let strip = strip.translate(vec2(0.0, -3.0));
+        let mut centred = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
+        centred.spacing_mut().slider_width = 44.0;
+        if centred.add(slider).on_hover_text("Zoom").changed() {
+            self.zoom_to(zoom, None);
+        }
+        if tiny_button(ui, icon::PLUS, "Zoom in") {
+            self.zoom_by(1.25);
+        }
+        if tiny_button(ui, icon::ARROWS_CLOCKWISE, "Fit to the window (Ctrl/Cmd+0)") {
+            self.zoom = 1.0;
+            self.zoom_moved = true;
+            self.pan = Vec2::ZERO;
+        }
+        ui.spacing_mut().item_spacing.x = spacing;
     }
 
     /// The gradient editor behind the + tile, and behind a double click on one of your own tiles.
@@ -1365,7 +2004,7 @@ impl Editor {
         }
     }
 
-    fn style_controls(&mut self, ui: &mut egui::Ui) {
+    fn style_controls(&mut self, ui: &mut egui::Ui, vertical: bool) {
         // Colour swatch with palette popover.
         let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
         ui.painter().circle_filled(rect.center(), 11.0, self.color);
@@ -1388,7 +2027,7 @@ impl Editor {
                     }
                 }
             });
-            ui.separator();
+            bar_divider(ui, vertical);
             let mut c = self.color;
             if ui.color_edit_button_srgba(&mut c).changed() {
                 self.color = c;
@@ -2620,6 +3259,8 @@ impl Editor {
             ui.horizontal_centered(|ui| {
                 self.file_menu(ui);
                 ui.separator();
+                history_button(ui);
+                ui.separator();
                 ui.label(RichText::new("KeptCraft").size(15.0).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let open = egui::Button::new(RichText::new(format!("{}  Open a file…", icon::FOLDER_OPEN)).color(Color32::WHITE)).fill(theme::ACCENT);
@@ -2641,39 +3282,33 @@ impl Editor {
         });
         let margin = egui::Margin { left: 26, right: 26, top: 6, bottom: 6 };
         egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(margin)).show(root, |ui| {
-            // One column of three, centred, so a wide window does not blow the tiles up.
-            let column = (3.0 * TILE_MAX + 2.0 * TILE_GAP).min(ui.available_width());
-            let height = ui.available_height();
-            ui.vertical_centered(|ui| {
-                ui.allocate_ui_with_layout(vec2(column, height), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        ui.add_space(10.0);
-                        section(ui, "Recent edits");
-                        ui.add_space(8.0);
-                        let recents: Vec<Tile> =
-                            self.recent.iter().rev().take(6).map(|path| Tile { open: path.clone(), picture: path.clone(), label: file_label(path) }).collect();
-                        if recents.is_empty() {
-                            if self.open_tile(ui).clicked()
-                                && let Some(path) = dialogs::pick_image()
-                            {
-                                self.open_path(&ctx, path);
-                            }
-                        } else if let Some(path) = self.thumb_grid(ui, "recent", &recents, 2) {
-                            self.open_path(&ctx, path);
-                        }
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(10.0);
+                section(ui, "Recent edits");
+                ui.add_space(8.0);
+                let shown = self.settings.recent_edits.clamp(1, RECENT_KEPT as u32) as usize;
+                let recents: Vec<Tile> =
+                    self.recent.iter().rev().take(shown).map(|path| Tile { open: path.clone(), picture: path.clone(), label: file_label(path) }).collect();
+                if recents.is_empty() {
+                    if self.open_tile(ui).clicked()
+                        && let Some(path) = dialogs::pick_image()
+                    {
+                        self.open_path(&ctx, path);
+                    }
+                } else if let Some(path) = self.thumb_grid(ui, "recent", &recents) {
+                    self.open_path(&ctx, path);
+                }
 
-                        let kept = self.kept_tiles();
-                        if !kept.is_empty() {
-                            ui.add_space(22.0);
-                            section(ui, "From Kept");
-                            ui.add_space(8.0);
-                            if let Some(path) = self.thumb_grid(ui, "kept", &kept, KEPT_ROWS) {
-                                self.open_path(&ctx, path);
-                            }
-                        }
-                        ui.add_space(16.0);
-                    });
-                });
+                let kept = self.kept_tiles();
+                if !kept.is_empty() {
+                    ui.add_space(22.0);
+                    section(ui, "From Kept");
+                    ui.add_space(8.0);
+                    if let Some(path) = self.thumb_grid(ui, "kept", &kept) {
+                        self.open_path(&ctx, path);
+                    }
+                }
+                ui.add_space(16.0);
             });
         });
     }
@@ -2685,8 +3320,9 @@ impl Editor {
         }
         let mut tiles = Vec::new();
         if self.settings.kept.enabled
+            && self.settings.kept_captures > 0
             && let Some(kept) = keptcraft_engine::kept::detect()
-            && let Ok(clips) = keptcraft_engine::kept::recent_images(&kept, (KEPT_ROWS * 3) as u32)
+            && let Ok(clips) = keptcraft_engine::kept::recent_images(&kept, self.settings.kept_captures)
         {
             tiles = clips
                 .into_iter()
@@ -2704,7 +3340,7 @@ impl Editor {
 
     /// The card that stands in for a thumbnail when there is nothing to show yet.
     fn open_tile(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let (tile_w, tile_h) = tile_size(ui);
+        let (_, tile_w, tile_h) = tile_layout(ui.available_width());
         let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, tile_h), Sense::click());
         let hover = resp.hovered();
         let painter = ui.painter();
@@ -2718,13 +3354,14 @@ impl Editor {
         resp.on_hover_text("Open an image or a .keptcraft project")
     }
 
-    /// Lay tiles out three to a row, at most `rows` rows, and report the one clicked.
-    fn thumb_grid(&mut self, ui: &mut egui::Ui, id: &str, tiles: &[Tile], rows: usize) -> Option<PathBuf> {
-        let (tile_w, tile_h) = tile_size(ui);
+    /// Lay the tiles on rows that fill the start screen's width, and report the one clicked.
+    fn thumb_grid(&mut self, ui: &mut egui::Ui, id: &str, tiles: &[Tile]) -> Option<PathBuf> {
+        let (columns, tile_w, tile_h) = tile_layout(ui.available_width());
+        let rows = tiles.len().div_ceil(columns);
         let mut clicked = None;
         ui.push_id(id, |ui| {
             ui.spacing_mut().item_spacing.x = TILE_GAP;
-            for (row, chunk) in tiles.chunks(3).take(rows).enumerate() {
+            for (row, chunk) in tiles.chunks(columns).enumerate() {
                 ui.horizontal(|ui| {
                     for tile in chunk {
                         let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, tile_h), Sense::click());
@@ -3226,6 +3863,9 @@ impl Editor {
             ui.separator();
             ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).weak())
                 .on_hover_text("Wheel to zoom, Shift+wheel or the hand tool to move, Ctrl/Cmd+0 to fit");
+            // The zoom belongs with the figure it changes, in the corner of the window.
+            self.zoom_control(ui);
+            ui.separator();
             if let Some((label, _)) = &self.task {
                 ui.separator();
                 ui.spinner();
@@ -3293,7 +3933,7 @@ fn zoomed_pan(pan: Vec2, centre: Pos2, anchor: Pos2, factor: f32) -> Vec2 {
     (1.0 - factor) * (anchor - centre) + pan * factor
 }
 
-/// A small square icon button for the zoom cluster.
+/// A small square icon button for the zoom cluster, in the status bar.
 fn tiny_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     let colour = ui.visuals().widgets.inactive.fg_stroke.color;
@@ -3486,13 +4126,8 @@ impl eframe::App for Editor {
         self.handle_shortcuts(ctx);
 
         egui::Panel::top("toolbar").exact_size(48.0).show(root, |ui| if self.crop.is_some() { self.crop_bar(ui) } else { self.toolbar(ui) });
-        if self.crop.is_none() {
-            // Per-tool options get their own row so the toolbar never overflows into the actions.
-            egui::Panel::top("options").exact_size(36.0).show(root, |ui| {
-                ui.horizontal_centered(|ui| self.style_controls(ui));
-            });
-        }
         egui::Panel::bottom("status").exact_size(32.0).show(root, |ui| self.status_bar(ui));
+        self.toolbar_strips(root);
         if self.show_commentary && self.crop.is_none() {
             if self.commentary_collapsed {
                 // A rail with one way back out. Its own id keeps the open panel's width intact.
@@ -3618,6 +4253,217 @@ mod tests {
         let middle = thumb.get_pixel(THUMB_WIDTH / 2, expected / 2).0;
         assert!(middle[0] > 150 && middle[2] < 140, "the middle of a tall image is what shows: {middle:?}");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// The start screen fills its width: a wide window gets more tiles to a row rather than bigger
+    /// ones, and a squeezed one keeps them wide enough to read.
+    #[test]
+    fn start_screen_tiles_reflow_with_the_window() {
+        assert_eq!(tile_layout(988.0), (3, 320.0, (320.0 * TILE_SHAPE).round()), "three at the widest");
+        let (columns, width, _) = tile_layout(1600.0);
+        assert_eq!(columns, 5, "a wider window gets a fifth tile, not wider ones");
+        assert!(width <= TILE_MAX, "and no tile grows past its widest: {width}");
+        assert_eq!(tile_layout(420.0).0, 2);
+        assert_eq!(tile_layout(300.0).0, 1);
+        assert_eq!(tile_layout(80.0).1, TILE_MIN, "a squeezed window never shrinks a tile away");
+    }
+
+    /// A strip dropped near an edge docks there; one dropped in the middle of the window floats.
+    #[test]
+    fn a_strip_docks_only_when_it_is_dropped_near_an_edge() {
+        let window = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        assert_eq!(dock_for_pointer(window, pos2(20.0, 400.0), DOCK_REACH, None), Some(StripDock::Left));
+        assert_eq!(dock_for_pointer(window, pos2(980.0, 400.0), DOCK_REACH, None), Some(StripDock::Right));
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 10.0), DOCK_REACH, None), Some(StripDock::Top));
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 790.0), DOCK_REACH, None), Some(StripDock::Bottom));
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 400.0), DOCK_REACH, None), None, "the middle of the canvas floats it");
+        // A corner takes the nearest edge, not the first one checked.
+        assert_eq!(dock_for_pointer(window, pos2(8.0, 300.0), DOCK_REACH, None), Some(StripDock::Left));
+    }
+
+    /// A bar dropped just under the menus docks to the top, and the band for it sits under the top
+    /// bar rather than on the window's edge: the top edge of the window is behind that bar.
+    #[test]
+    fn the_top_edge_is_below_the_window_top_bar() {
+        let window = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let top_bar = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 48.0));
+        assert_eq!(top_edge(window, Some(top_bar)), 48.0);
+        assert_eq!(top_edge(window, None), 0.0, "with no top bar the window edge is the edge");
+
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 60.0), DOCK_REACH, Some(top_bar)), Some(StripDock::Top), "just under the menus");
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 48.0 + DOCK_REACH), DOCK_REACH, Some(top_bar)), Some(StripDock::Top), "as far as the reach goes");
+        assert_eq!(dock_for_pointer(window, pos2(500.0, 48.0 + DOCK_REACH + 20.0), DOCK_REACH, Some(top_bar)), None, "past it, it floats");
+
+        // The line shows the row the bar will take: the first one under the menus, or the one after
+        // any rows already docked there.
+        assert_eq!(top_drop_line(&EditorLayout::default(), &[Strip::Properties], window, Some(top_bar)), 48.0);
+        assert_eq!(
+            top_drop_line(&EditorLayout::default(), &[Strip::Marks], window, Some(top_bar)),
+            48.0 + STRIP_SIZE,
+            "the options row is already there, so the next row is below it"
+        );
+    }
+
+    /// A drop keeps the strip where it was let go unless an edge takes it, and a strip on an edge
+    /// turns to run along it.
+    #[test]
+    fn a_dropped_strip_turns_to_run_along_the_edge_it_lands_on() {
+        let window = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let mut strip = StripPlacement { visible: true, dock: None, pos: [400.0, 300.0], vertical: false, group: 0 };
+        settle_drop(&mut strip, window, pos2(500.0, 400.0), None);
+        assert_eq!((strip.dock, strip.pos), (None, [400.0, 300.0]), "the canvas leaves it floating where it landed");
+        settle_drop(&mut strip, window, pos2(12.0, 400.0), None);
+        assert_eq!(strip.dock, Some(StripDock::Left));
+        assert!(strip.vertical, "a strip on a side edge runs down it");
+        settle_drop(&mut strip, window, pos2(500.0, 12.0), None);
+        assert_eq!(strip.dock, Some(StripDock::Top));
+        assert!(!strip.vertical, "one along the top runs across it");
+    }
+
+    /// Dropping a strip on another floating card merges the two into that card, and a strip
+    /// dropped on a member of a merged card joins the whole card rather than starting a new one.
+    #[test]
+    fn a_strip_dropped_on_a_floating_card_joins_its_row() {
+        let mut alone = StripPlacement { visible: true, dock: None, pos: [200.0, 260.0], vertical: false, group: 0 };
+        let mut dragged = StripPlacement { visible: true, dock: None, pos: [500.0, 400.0], vertical: true, group: 0 };
+        join_card(&mut dragged, &mut alone, 2);
+        assert_eq!(dragged.group, 3, "the card is named after the first member of it");
+        assert!(!dragged.vertical, "it takes the card's direction, so the two read as one row");
+        assert_eq!(dragged.pos, alone.pos, "the card stays where the user aimed");
+        assert_eq!(dragged.dock, None);
+        assert_eq!(alone.group, 3, "the strip it landed on joins the same card");
+
+        // Joining a card that is already a group keeps its id, so all three share one bar.
+        let mut merged = StripPlacement { group: 3, ..alone.clone() };
+        let mut third = StripPlacement { visible: true, dock: None, pos: [0.0, 0.0], vertical: false, group: 0 };
+        join_card(&mut third, &mut merged, 3);
+        assert_eq!(third.group, 3);
+    }
+
+    /// Dropping a strip on a row that is already docked joins that row, so a docked bar can hold
+    /// several strips too — the row sits well inside the window, where only the bar itself can take
+    /// the drop.
+    #[test]
+    fn a_strip_dropped_on_a_docked_row_joins_that_row() {
+        let window = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let mut layout = EditorLayout::default();
+        layout.share.dock = None; // the user tore Share off its edge
+        layout.marks = StripPlacement { visible: true, dock: Some(StripDock::Top), pos: [0.0, 0.0], vertical: false, group: 0 };
+        let mut rects: [Option<Rect>; 6] = [None; 6];
+        rects[Strip::Marks.index()] = Some(Rect::from_min_max(pos2(200.0, 84.0), pos2(900.0, 128.0)));
+        rects[Strip::Share.index()] = Some(Rect::from_min_max(pos2(400.0, 400.0), pos2(600.0, 444.0)));
+
+        let (landed, merged) = Editor::landing(&layout, &[Strip::Share], window, pos2(300.0, 100.0), &rects, None);
+        let (target, bar) = merged.expect("the row under the pointer takes the drop");
+        assert_eq!(target, Strip::Marks);
+        assert_eq!(landed.dock, Some(StripDock::Top), "it is docked where the row is");
+        assert_eq!(bar.group, landed.group);
+        assert_ne!(landed.group, 0, "the two now draw as one row");
+    }
+
+    /// A drop away from any bar lands on the edge it is near, or floats where it was let go.
+    #[test]
+    fn a_strip_dropped_away_from_a_bar_docks_only_near_an_edge() {
+        let window = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let mut layout = EditorLayout::default();
+        layout.share.dock = None; // in hand, so it is floating while the pointer moves
+        let rects: [Option<Rect>; 6] = [None; 6];
+
+        let (edge, merged) = Editor::landing(&layout, &[Strip::Share], window, pos2(1000.0 - 20.0, 400.0), &rects, None);
+        assert!(merged.is_none());
+        assert_eq!(edge.dock, Some(StripDock::Right));
+        assert!(edge.vertical, "a strip on a side edge runs down it");
+
+        let (floating, merged) = Editor::landing(&layout, &[Strip::Share], window, pos2(500.0, 400.0), &rects, None);
+        assert!(merged.is_none());
+        assert_eq!((floating.dock, floating.group), (None, 0), "the canvas leaves it floating alone");
+
+        // The window's own bar takes a drop too, and holds the strip beside File and View.
+        let top_bar = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 48.0));
+        let (in_bar, merged) = Editor::landing(&layout, &[Strip::Share], window, pos2(500.0, 24.0), &rects, Some(top_bar));
+        assert!(merged.is_none());
+        assert_eq!(in_bar.dock, Some(StripDock::TopBar));
+        assert!(!in_bar.vertical, "a strip in the top bar lies along it");
+    }
+
+    /// A double click on a floating bar's handle turns the whole bar, and the second click turns it
+    /// back, so a column of tools becomes a row and vice versa.
+    #[test]
+    fn turning_a_floating_bar_turns_all_of_it() {
+        let mut layout = EditorLayout::default();
+        for strip in [Strip::Marks, Strip::Share, Strip::Transform] {
+            *placement_of_mut(&mut layout, strip) = StripPlacement { visible: true, dock: None, pos: [100.0, 200.0], vertical: false, group: 4 };
+        }
+        let members = [Strip::Marks, Strip::Share, Strip::Transform];
+        turn_bar(&mut layout, &members);
+        assert!(members.iter().all(|strip| placement_of(&layout, *strip).vertical), "the whole bar lies down");
+        turn_bar(&mut layout, &members);
+        assert!(members.iter().all(|strip| !placement_of(&layout, *strip).vertical), "and turns back");
+    }
+
+    /// A strip on its own draws as a bar of one; strips sharing a group and an edge draw as a single
+    /// bar led by the first of them, and one hidden from the View menu simply leaves the bar.
+    #[test]
+    fn strips_sharing_a_group_and_an_edge_draw_as_one_bar() {
+        let layout = EditorLayout::default();
+        // The tools and the crop/background bar share the left column; the four option bars are
+        // rows of their own.
+        assert_eq!(cards(&layout).len(), 5);
+        let tools = cards(&layout).into_iter().find(|card| card.members.len() == 2).expect("the tools share their column");
+        assert_eq!(tools.members, vec![Strip::Tools, Strip::Document]);
+
+        let mut merged = EditorLayout::default();
+        merged.marks.group = 4;
+        merged.share.group = 4;
+        let bars = cards(&merged);
+        assert_eq!(bars.len(), 4, "two top strips merged into one bar");
+        let bar = bars.iter().find(|card| card.first == Strip::Marks).expect("the merged row");
+        assert_eq!(bar.members, vec![Strip::Marks, Strip::Share]);
+
+        merged.share.visible = false;
+        assert_eq!(cards(&merged).iter().filter(|card| card.members.len() == 2).count(), 1, "only the tools' column is left");
+    }
+
+    /// A bar turned on the spot must lose the height it had. An area keeps the size it had last
+    /// frame, so the rules between strips are sized in pixels: a `separator` stretches to fill that
+    /// old size and leaves the turned bar as tall as the column it used to be.
+    #[test]
+    fn a_bar_shrinks_when_it_is_turned() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("turned-bar");
+        let bar = |ctx: &egui::Context, vertical: bool| {
+            // A fresh area per direction, as the editor does: an area keeps its old size otherwise.
+            let id = id.with(vertical);
+            let area = egui::Area::new(id).fixed_pos(pos2(0.0, 0.0)).show(ctx, |ui| {
+                let row = |ui: &mut egui::Ui| {
+                    for i in 0..3 {
+                        if i > 0 {
+                            bar_divider(ui, vertical);
+                        }
+                        let _ = ui.button("tool");
+                    }
+                };
+                if vertical {
+                    ui.vertical(row);
+                } else {
+                    ui.horizontal_centered(row);
+                }
+            });
+            area.response.rect.size()
+        };
+        let mut size = Vec2::ZERO;
+        let column = {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| size = bar(ui.ctx(), true));
+            out.textures_delta.clear();
+            size
+        };
+        let row = {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| size = bar(ui.ctx(), false));
+            out.textures_delta.clear();
+            size
+        };
+        assert!(row.y < column.y * 0.6, "a row is short: {row:?} against {column:?}");
+        assert!(row.x > column.x * 1.5, "and wide: {row:?} against {column:?}");
     }
 
     #[test]

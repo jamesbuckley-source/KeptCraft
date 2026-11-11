@@ -32,7 +32,11 @@ struct HistoryApp {
 pub fn run() -> anyhow::Result<()> {
     let settings = Settings::load();
     history::prune(settings.history_days);
-    let builder = egui::ViewportBuilder::default().with_title("Capture History").with_inner_size(vec2(1000.0, 640.0)).with_min_inner_size(vec2(640.0, 400.0));
+    let builder = egui::ViewportBuilder::default()
+        .with_title("Capture History")
+        .with_inner_size(vec2(1000.0, 640.0))
+        .with_min_inner_size(vec2(640.0, 400.0))
+        .with_taskbar(settings.show_in_taskbar);
     theme::run("keptcraft-history", builder, move |_| {
         let (tx, rx) = channel();
         HistoryApp {

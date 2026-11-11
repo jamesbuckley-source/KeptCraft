@@ -1,7 +1,7 @@
 //! Editable screenshot document: base image, annotations, crop and background.
 //! Geometry is in base-image pixels.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ecolor::Color32;
@@ -23,6 +23,16 @@ pub fn is_project_path(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT) || e.eq_ignore_ascii_case(LEGACY_PROJECT_EXT))
 }
 
+/// The project paired with an image, preferring the current extension over the legacy one.
+pub fn associated_project_path(image: &Path) -> PathBuf {
+    let project = image.with_extension(PROJECT_EXT);
+    if project.is_file() {
+        return project;
+    }
+    let legacy = image.with_extension(LEGACY_PROJECT_EXT);
+    if legacy.is_file() { legacy } else { project }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArrowStyle {
     /// Tapered shaft with a wide head.
@@ -33,6 +43,10 @@ pub enum ArrowStyle {
     Double,
     /// Quadratic curve; `bend` controls the curvature.
     Curved,
+}
+
+impl ArrowStyle {
+    pub const ALL: [ArrowStyle; 4] = [ArrowStyle::Tapered, ArrowStyle::Classic, ArrowStyle::Double, ArrowStyle::Curved];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,12 +81,20 @@ pub enum RedactMode {
     Solid,
 }
 
+impl RedactMode {
+    pub const ALL: [RedactMode; 4] = [RedactMode::Pixelate, RedactMode::SecureBlur, RedactMode::Blur, RedactMode::Solid];
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CounterLabel {
     #[default]
     Numbers,
     /// 1 = A, 26 = Z, 27 = AA, so a run of steps can read as a list.
     Letters,
+}
+
+impl CounterLabel {
+    pub const ALL: [CounterLabel; 2] = [CounterLabel::Numbers, CounterLabel::Letters];
 }
 
 /// How numbered steps look: size, label kind, ring, shadow and the space around the label.
@@ -1113,6 +1135,12 @@ impl Doc {
         if is_project_path(path) {
             return Self::load_project(path);
         }
+        if image::ImageFormat::from_path(path).is_ok() {
+            let project = associated_project_path(path);
+            if project.is_file() {
+                return Self::load_project(&project);
+            }
+        }
         Ok(Self::new(image::open(path)?.into_rgba8()))
     }
 }
@@ -1229,6 +1257,114 @@ mod tests {
         assert_eq!((dragged.min, dragged.max), (pos2(65.0, 72.0), pos2(85.0, 82.0)));
     }
 
+    /// Every name a project uses on disk: object keys and the capitalised strings that stand for
+    /// enum variants and alignments. The sample's own text is empty, so nothing else is picked up.
+    fn wire_names(value: &serde_json::Value, names: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    names.insert(key.clone());
+                    wire_names(value, names);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| wire_names(item, names)),
+            serde_json::Value::String(text) if text.starts_with(char::is_uppercase) => {
+                names.insert(text.clone());
+            }
+            _ => {}
+        }
+    }
+
+    /// One document that carries every shape, so the walk above sees every field.
+    fn sample_using_everything() -> Doc {
+        let pixel = || Arc::new(RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 255])));
+        let rect = Rect::from_min_max(pos2(1.0, 2.0), pos2(30.0, 40.0));
+        let counter = |label| Shape::Counter { center: pos2(5.0, 5.0), n: 1, style: CounterStyle { label, ..Default::default() }, label: None };
+        let shapes = [
+            Shape::Rect { rect, filled: true },
+            Shape::Ellipse { rect, filled: false },
+            Shape::Line { a: pos2(0.0, 0.0), b: pos2(1.0, 1.0) },
+            Shape::Arrow { a: pos2(0.0, 0.0), b: pos2(1.0, 1.0), style: ArrowStyle::Tapered, bend: 0.0 },
+            Shape::Pen { pts: vec![pos2(0.0, 0.0)] },
+            Shape::Highlighter { pts: vec![pos2(0.0, 0.0)] },
+            Shape::Text { pos: pos2(0.0, 0.0), text: String::new(), size: 12.0, style: TextStyle::Plain, wrap: Some(40.0) },
+            counter(CounterLabel::Numbers),
+            Shape::Redact { rect, mode: RedactMode::Pixelate, seed: 1 },
+            Shape::Spotlight { rect, ellipse: true },
+            Shape::Image { rect, image: pixel() },
+        ];
+        let mut doc = Doc::new(RgbaImage::new(8, 8));
+        doc.items = shapes.into_iter().map(|shape| Item { shape, color: Color32::WHITE, width: 2.0 }).collect();
+        doc.crop = Some(rect);
+        doc.background = Some(Background {
+            fill: BgFill::Solid(Color32::WHITE),
+            watermark: Some(Watermark { image: pixel(), anchor: Anchor::BottomRight, width: 0.2, offset: Vec2::ZERO, opacity: 1.0 }),
+            ..Default::default()
+        });
+        doc.commentary = Some(Commentary {
+            entries: vec![CommentEntry { n: 1, text: String::new(), spans: vec![TextSpan { start: 0, end: 1, bold: true, italic: false }] }],
+            header: Some(String::new()),
+            ..Default::default()
+        });
+        doc
+    }
+
+    /// The format is a public contract: a file another tool writes must still load, so every name
+    /// it can contain is written down in docs/project-format.md, in backticks, and checked here.
+    #[test]
+    fn the_format_doc_names_every_field_and_tag() {
+        let project = ProjectFile { format: PROJECT_FORMAT.into(), version: PROJECT_VERSION, doc: sample_using_everything() };
+        let mut names = std::collections::BTreeSet::new();
+        wire_names(&serde_json::to_value(project).unwrap(), &mut names);
+        // Variants the one sample cannot show, straight from the enums.
+        let mut variants = Vec::new();
+        for style in ArrowStyle::ALL {
+            variants.push(serde_json::to_value(style).unwrap());
+        }
+        for style in TextStyle::ALL {
+            variants.push(serde_json::to_value(style).unwrap());
+        }
+        for mode in RedactMode::ALL {
+            variants.push(serde_json::to_value(mode).unwrap());
+        }
+        for label in CounterLabel::ALL {
+            variants.push(serde_json::to_value(label).unwrap());
+        }
+        for anchor in Anchor::ALL {
+            variants.push(serde_json::to_value(anchor).unwrap());
+        }
+        for side in CommentarySide::ALL {
+            variants.push(serde_json::to_value(side).unwrap());
+        }
+        for (aspect, _) in Aspect::PRESETS {
+            variants.push(serde_json::to_value(aspect).unwrap());
+        }
+        for align in [Align::Min, Align::Center, Align::Max] {
+            variants.push(serde_json::to_value(Align2([align, align])).unwrap());
+        }
+        for fill in [
+            BgFill::Transparent,
+            BgFill::Gradient(0),
+            BgFill::Custom(Box::new(OwnedGradient { angle: 0.0, stops: Vec::new() })),
+            BgFill::Solid(Color32::WHITE),
+            BgFill::Image(Arc::new(RgbaImage::new(1, 1))),
+            BgFill::Blurred,
+        ] {
+            variants.push(serde_json::to_value(fill).unwrap());
+        }
+        for variant in &variants {
+            wire_names(variant, &mut names);
+        }
+
+        // A guard against the walk finding almost nothing and passing by accident.
+        assert!(names.len() > 90, "the walk found only {} names", names.len());
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/project-format.md");
+        let doc = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        assert!(doc.contains(&format!("`{PROJECT_FORMAT}`")), "the doc must name the format marker");
+        let missing: Vec<_> = names.iter().filter(|name| !doc.contains(&format!("`{name}`"))).collect();
+        assert!(missing.is_empty(), "docs/project-format.md leaves out {missing:?}; name each in backticks");
+    }
+
     #[test]
     fn project_round_trips_through_disk() {
         let doc = sample_doc();
@@ -1236,6 +1372,19 @@ mod tests {
         doc.save_project(&path).unwrap();
         let loaded = Doc::load_project(&path).unwrap();
         std::fs::remove_file(&path).ok();
+        assert_eq!(loaded, doc);
+    }
+
+    #[test]
+    fn image_opens_its_associated_project() {
+        let image_path = std::env::temp_dir().join(format!("keptcraft-associated-{}.png", std::process::id()));
+        let project_path = associated_project_path(&image_path);
+        let doc = sample_doc();
+        RgbaImage::new(1, 1).save(&image_path).unwrap();
+        doc.save_project(&project_path).unwrap();
+        let loaded = Doc::open(&image_path).unwrap();
+        std::fs::remove_file(&image_path).ok();
+        std::fs::remove_file(&project_path).ok();
         assert_eq!(loaded, doc);
     }
 

@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "keptcraft"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "keptcraft-doc"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "base64",
  "ecolor",
@@ -2686,7 +2686,7 @@ dependencies = [
 
 [[package]]
 name = "keptcraft-engine"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "arboard",
  "chrono",
@@ -2713,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "keptcraft-ui-egui"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "anyhow",
  "chrono",

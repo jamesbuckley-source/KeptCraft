@@ -82,6 +82,19 @@ The app id `io.github.jamesbuckley-source.keptcraft` (`theme::APP_ID`) names the
 The editor preview and every export go through `doc::render`, so what the user sees is what gets saved.
 Add drawing behaviour there, not in egui painting code.
 
+### The `.keptcraft` format
+
+`docs/project-format.md` is the public contract for a project file, because a file another tool writes must still load.
+When you add or rename a field, a shape, an enum variant or a background fill in `doc::model`, update that page: its test, `the_format_doc_names_every_field_and_tag`, reads the serialized model and fails until every name it can contain is there in backticks.
+
+### The editor's tool bars
+
+The editor's tools and options are six movable bars: `EditorLayout` in `engine::config`, saved in
+`state.json` beside a document, never in one. `cards()` groups strips that share a group and an edge
+into one bar; `landing()` decides where a dropped bar goes (a bar under the pointer, the window's
+top bar, an edge within reach, or where it was let go). Draw the drop hint from `landing()` too, or
+the blue line will show a different place from the one the drop takes.
+
 ### Files another app handed over
 
 `open-annotate --save-to` and `--overwrite` are a contract with a caller (Kept, a script): Save writes

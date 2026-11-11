@@ -247,6 +247,8 @@ pub struct Settings {
     pub export_format: ExportFormat,
     pub jpeg_quality: u8,
     pub show_quick_access: bool,
+    pub show_in_taskbar: bool,
+    pub auto_create_projects: bool,
     pub copy_after_capture: bool,
     pub save_after_capture: bool,
     pub show_crosshair: bool,
@@ -259,6 +261,10 @@ pub struct Settings {
     pub timer_seconds: u32,
     pub ocr_keep_linebreaks: bool,
     pub history_days: u32,
+    /// How many of your own recent edits the start screen shows.
+    pub recent_edits: u32,
+    /// How many of Kept's newest captures the start screen shows; 0 leaves them out.
+    pub kept_captures: u32,
     pub hotkeys: Hotkeys,
     pub upload: UploadSettings,
     pub kept: KeptSettings,
@@ -280,6 +286,8 @@ impl Default for Settings {
             export_format: ExportFormat::Png,
             jpeg_quality: 90,
             show_quick_access: true,
+            show_in_taskbar: true,
+            auto_create_projects: false,
             // Every capture reaches Kept through the clipboard without a second action.
             copy_after_capture: true,
             save_after_capture: false,
@@ -293,6 +301,8 @@ impl Default for Settings {
             timer_seconds: 5,
             ocr_keep_linebreaks: true,
             history_days: 30,
+            recent_edits: 9,
+            kept_captures: 30,
             hotkeys: Hotkeys::default(),
             upload: UploadSettings::default(),
             kept: KeptSettings::default(),
@@ -390,10 +400,82 @@ pub struct LastArea {
     pub height: u32,
 }
 
+/// An edge of the editor window a toolbar strip can dock to, or the window's own top bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StripDock {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    /// In the top bar beside File and View, rather than on a row of its own.
+    TopBar,
+}
+
+/// Where one of the editor's toolbar strips sits: on an edge, or floating inside the window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StripPlacement {
+    pub visible: bool,
+    /// The edge it is docked to; `None` floats the strip at `pos`.
+    pub dock: Option<StripDock>,
+    /// Top-left of a floating strip, in points from the window's top-left corner.
+    pub pos: [f32; 2],
+    /// Whether its buttons run down the screen; a torn-off strip keeps the way it was laid out.
+    pub vertical: bool,
+    /// Floating strips that share a card: 0 is a card of its own, anything else is a group id.
+    pub group: u8,
+}
+
+impl Default for StripPlacement {
+    fn default() -> Self {
+        Self { visible: true, dock: None, pos: [80.0, 160.0], vertical: true, group: 0 }
+    }
+}
+
+/// The strips the editor's tools are grouped into, and where each one sits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorLayout {
+    /// The drawing tools, vertical on the left by default.
+    pub tools: StripPlacement,
+    /// Crop and the background tool.
+    pub document: StripPlacement,
+    /// The options that belong to the tool in use.
+    pub properties: StripPlacement,
+    /// Pixelate, spotlight, steps and the freehand tools.
+    pub marks: StripPlacement,
+    /// Pin, upload and Copy Text (OCR).
+    pub share: StripPlacement,
+    /// Rotate and flip.
+    pub transform: StripPlacement,
+}
+
+impl Default for EditorLayout {
+    fn default() -> Self {
+        let placed = |dock, vertical, group| StripPlacement { visible: true, dock: Some(dock), pos: [0.0; 2], vertical, group };
+        Self {
+            // Crop and the background tool share the tools' column, so a fresh window is not all
+            // bars: they sit under the drawing tools, on their own bar with a grip of their own.
+            tools: placed(StripDock::Left, true, 1),
+            document: placed(StripDock::Left, true, 1),
+            // The tool options get the row under the top bar, where the settings for the tool in
+            // use belong.
+            properties: placed(StripDock::Top, false, 0),
+            // The rest of the tools ride in the top bar beside File and View, leaving the canvas
+            // the height of a window rather than a stack of rows.
+            marks: placed(StripDock::TopBar, false, 0),
+            share: placed(StripDock::TopBar, false, 0),
+            transform: placed(StripDock::TopBar, false, 0),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
     pub last_area: Option<LastArea>,
+    /// Where the editor's toolbar strips sit.
+    pub editor_layout: EditorLayout,
     /// History ids of Quick Access Overlays closed without an action, most recent last.
     pub recently_closed: Vec<String>,
     /// Files opened in the editor, most recent last: the File menu's Recent Files.
@@ -465,6 +547,8 @@ mod tests {
     fn defaults_suit_a_clip_manager() {
         let s = Settings::default();
         assert!(s.copy_after_capture, "a capture should reach Kept without a second action");
+        assert!(s.show_in_taskbar);
+        assert!(!s.auto_create_projects, "project sidecars should require opting in");
         assert_eq!(s.save_dir.file_name().and_then(|n| n.to_str()), Some("KeptCraft"), "captures get their own folder, not the Desktop");
         assert!(s.quick_access_auto_close > 0, "the card should not linger once the clip is in Kept");
         assert!(s.update_auto, "a new version should be offered without a settings trip");
@@ -473,6 +557,44 @@ mod tests {
         for key in keys {
             assert!(key.starts_with("Ctrl+Shift+"), "{key} leaves the modifier family Kept and Windows use");
         }
+    }
+
+    /// The start screen fills a fresh window without a settings trip first.
+    #[test]
+    fn start_screen_shows_nine_edits_and_thirty_captures() {
+        let s = Settings::default();
+        assert_eq!(s.recent_edits, 9);
+        assert_eq!(s.kept_captures, 30);
+    }
+
+    /// The editor opens with the drawing tools down the left and the other bars along the top,
+    /// which is the bar KeptCraft has always had, plus the tools moved out of it.
+    #[test]
+    fn the_editor_starts_with_the_tools_on_the_left_and_the_rest_on_top() {
+        let layout = EditorLayout::default();
+        assert_eq!(layout.tools.dock, Some(StripDock::Left));
+        assert!(layout.tools.vertical, "the drawing tools read down the screen");
+        assert_eq!(layout.document.dock, Some(StripDock::Left), "crop and background sit under the tools");
+        assert_eq!(layout.document.group, layout.tools.group, "on the tools' own bar");
+        assert_eq!(layout.properties.dock, Some(StripDock::Top), "the tool options get the row under the top bar");
+        assert!(!layout.properties.vertical);
+        for strip in [&layout.marks, &layout.share, &layout.transform] {
+            assert_eq!(strip.dock, Some(StripDock::TopBar), "the rest of the tools ride in the top bar");
+            assert!(!strip.vertical, "a strip in the top bar lies along it");
+            assert!(strip.visible);
+        }
+    }
+
+    /// A state file written before the strips existed still loads, and a moved strip comes back
+    /// where it was left.
+    #[test]
+    fn a_state_file_without_a_layout_gets_the_default_one() {
+        let empty: State = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.editor_layout, EditorLayout::default());
+
+        let moved = EditorLayout { share: StripPlacement { visible: false, dock: None, pos: [120.0, 240.0], vertical: true, group: 3 }, ..Default::default() };
+        let back: EditorLayout = serde_json::from_str(&serde_json::to_string(&moved).unwrap()).unwrap();
+        assert_eq!(back, moved);
     }
 
     #[test]

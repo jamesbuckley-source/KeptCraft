@@ -71,8 +71,12 @@ struct SettingsApp {
 
 pub fn run(tab: Option<String>) -> anyhow::Result<()> {
     let tab = tab.and_then(|t| TABS.iter().find(|x| x.1 == t.to_ascii_lowercase()).map(|x| x.0)).unwrap_or(Tab::General);
-    let builder = egui::ViewportBuilder::default().with_title("KeptCraft Settings").with_inner_size(vec2(780.0, 560.0)).with_resizable(false);
     let settings = Settings::load();
+    let builder = egui::ViewportBuilder::default()
+        .with_title("KeptCraft Settings")
+        .with_inner_size(vec2(780.0, 560.0))
+        .with_resizable(false)
+        .with_taskbar(settings.show_in_taskbar);
     theme::run("keptcraft-settings", builder, move |ctx| SettingsApp {
         headers_text: settings.upload.headers.join("\n"),
         update: update_ui::Updater::new(),
@@ -405,6 +409,22 @@ impl SettingsApp {
                     ui.add(egui::Slider::new(&mut s.jpeg_quality, 40..=100).show_value(false));
                 });
             }
+            rows.switch(
+                "Auto-create project files",
+                Some("For newly opened editors: create a matching .keptcraft file beside an image on its first annotation"),
+                &mut s.auto_create_projects,
+            );
+        });
+        group(ui, "Window", |rows| {
+            rows.switch("Show in taskbar", Some("Show editor, settings and history windows opened after this change"), &mut s.show_in_taskbar);
+        });
+        group(ui, "Start screen", |rows| {
+            rows.row("Recent edits", Some("Your own edits shown when no file is open"), |ui| {
+                ui.add(DragValue::new(&mut s.recent_edits).range(1..=30).speed(0.2));
+            });
+            rows.row("From Kept", Some("Kept's newest captures to show; 0 leaves the section out"), |ui| {
+                ui.add(DragValue::new(&mut s.kept_captures).range(0..=100).speed(0.5));
+            });
         });
         let busy = self.update.busy();
         let offering = self.update.offering().cloned();
